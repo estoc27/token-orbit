@@ -22,7 +22,18 @@ running() {
 }
 
 launch() {
-  # The exe location is user-specific; try PATH, then report.
+  # 1) The HUD registers its own path on every start (~/.token-orbit/app-path),
+  #    so we can relaunch it from anywhere without configuration.
+  if [ -f "$DIR/app-path" ]; then
+    EXE="$(cat "$DIR/app-path")"
+    command -v cygpath >/dev/null 2>&1 && EXE="$(cygpath -u "$EXE" 2>/dev/null || printf '%s' "$EXE")"
+    if [ -f "$EXE" ]; then
+      ("$EXE" >/dev/null 2>&1 &)
+      echo "[orbit] launched"
+      return
+    fi
+  fi
+  # 2) PATH fallback, 3) guidance.
   if command -v token-orbit >/dev/null 2>&1; then
     (token-orbit >/dev/null 2>&1 &)
     echo "[orbit] launched (from PATH)"
@@ -30,8 +41,9 @@ launch() {
     (token-orbit.exe >/dev/null 2>&1 &)
     echo "[orbit] launched (from PATH)"
   else
-    echo "[orbit] HUD is not running and token-orbit is not on PATH."
-    echo "        Start it from your build: target/release/token-orbit.exe"
+    echo "[orbit] HUD is not running and no registered app path was found."
+    echo "        Start it once from your build: target/release/token-orbit.exe"
+    echo "        (it registers itself; /orbit can launch it from then on)"
   fi
 }
 

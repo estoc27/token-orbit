@@ -37,6 +37,11 @@ if "%ACTION%"=="hide" exit /b 0
 if "%ACTION%"=="quit" exit /b 0
 
 :launch
+REM Prefer the path the HUD registered on its last start (works from anywhere);
+REM fall back to the repo-relative build path.
+if exist "%USERPROFILE%\.token-orbit\app-path" (
+  set /p EXE=<"%USERPROFILE%\.token-orbit\app-path"
+)
 if not exist "%EXE%" (
   echo [orbit] executable not found: %EXE%
   echo         build first: cargo build --release -p token-orbit

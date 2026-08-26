@@ -296,6 +296,14 @@ fn main() {
             if let Some(p) = control_file() {
                 let _ = std::fs::remove_file(p);
             }
+            // 자기 경로 등록 — /orbit 등 외부 제어가 HUD 꺼진 상태에서도
+            // 어디서 실행해야 하는지 알 수 있게 한다 (설치 위치 무관, 매 실행 갱신).
+            if let (Ok(exe), Some(ctl)) = (std::env::current_exe(), control_file()) {
+                if let Some(dir) = ctl.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                    let _ = std::fs::write(dir.join("app-path"), exe.to_string_lossy().as_bytes());
+                }
+            }
 
             // 수집 루프 — UI와 분리된 백그라운드 스레드 (README §4.4).
             std::thread::spawn(move || {
