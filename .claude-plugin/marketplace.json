@@ -1,0 +1,14 @@
+{
+  "name": "token-orbit",
+  "owner": {
+    "name": "estoc27",
+    "url": "https://github.com/estoc27"
+  },
+  "plugins": [
+    {
+      "name": "token-orbit",
+      "source": "./",
+      "description": "Control the Token Orbit usage HUD from Claude Code: /orbit toggles the overlay, /orbit-setup wires the Claude usage statusline tap."
+    }
+  ]
+}

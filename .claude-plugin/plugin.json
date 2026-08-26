@@ -1,0 +1,12 @@
+{
+  "name": "token-orbit",
+  "version": "0.1.0",
+  "description": "Control the Token Orbit usage HUD from Claude Code: /orbit toggles the overlay, /orbit-setup wires the Claude usage statusline tap.",
+  "author": {
+    "name": "estoc27",
+    "url": "https://github.com/estoc27"
+  },
+  "repository": "https://github.com/estoc27/token-orbit",
+  "license": "MIT",
+  "keywords": ["usage", "rate-limit", "hud", "overlay", "monitoring"]
+}

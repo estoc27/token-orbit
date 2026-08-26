@@ -72,23 +72,25 @@ The HUD appears as a small always-on-top overlay:
 - Codex usage appears with zero configuration if Codex is installed
 - No taskbar entry — control it via tray, hotkeys, or `scripts/orbit.cmd`
 
-### Scripted / editor control
+### Claude Code plugin
 
-`scripts/orbit.cmd [toggle|show|hide|quit|start]` drives the HUD through a
-watched control file (`~/.token-orbit/control`) — no ports. Wire it to a
-Claude Code slash command by dropping a file at `~/.claude/commands/orbit.md`:
+This repo doubles as a Claude Code plugin. Install once:
 
-```markdown
----
-description: Token Orbit HUD control
-allowed-tools: Bash(cmd //c *), Bash(cmd /c *)
----
-!`cmd //c "C:/path/to/token-orbit/scripts/orbit.cmd" $ARGUMENTS`
-
-Report the command output in one line.
+```
+/plugin marketplace add estoc27/token-orbit
+/plugin install token-orbit@token-orbit
 ```
 
-Then `/orbit`, `/orbit hide`, `/orbit quit` work from any Claude Code session.
+Then from any Claude Code session:
+
+- `/orbit` · `/orbit hide` · `/orbit quit` — control the HUD
+  (drives `~/.token-orbit/control`, a watched file; no ports)
+- `/orbit-setup` — installs the Claude usage statusline tap for you
+  (copies the tap script, wires `settings.json`, verifies with a
+  Korean-text encoding check, and never clobbers an existing statusline)
+
+Scripted control without the plugin: `scripts/orbit.cmd` (Windows) or
+`scripts/orbit-ctl.sh` (any shell), same verbs.
 
 ### Claude usage % (optional, recommended)
 
