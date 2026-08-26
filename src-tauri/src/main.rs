@@ -143,6 +143,41 @@ fn toggle_visibility(app: &AppHandle) {
     }
 }
 
+/// 외부 제어 파일 — `~/.token-orbit/control`.
+///
+/// 외부 프로세스(슬래시 커맨드, 스크립트)가 이 파일에 명령 한 줄을 쓰면
+/// HUD가 반응한다: `show` / `hide` / `toggle` / `quit`.
+/// 파일 감시가 이미 이 디렉터리를 보고 있어 쓰는 즉시 루프가 깨어난다.
+/// 포트를 열지 않는 로컬 IPC — 프로젝트 원칙(§1 비목표)에 부합한다.
+fn control_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|h| std::path::PathBuf::from(h).join(".token-orbit").join("control"))
+}
+
+fn handle_control(app: &AppHandle) {
+    let Some(path) = control_file() else { return };
+    let Ok(cmd) = std::fs::read_to_string(&path) else { return };
+    // 읽었으면 즉시 소비 — 같은 명령이 다음 tick에 재실행되지 않게.
+    let _ = std::fs::remove_file(&path);
+    match cmd.trim() {
+        "show" => {
+            if let Some(w) = app.get_webview_window(HUD) {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }
+        "hide" => {
+            if let Some(w) = app.get_webview_window(HUD) {
+                let _ = w.hide();
+            }
+        }
+        "toggle" => toggle_visibility(app),
+        "quit" => app.exit(0),
+        other => eprintln!("unknown control command: {other:?}"),
+    }
+}
+
 /// 프록시 탭(`scripts/proxy-tap.js`)을 띄운다.
 ///
 /// 사용자가 `ANTHROPIC_BASE_URL`을 프록시로 걸어둔 상태에서 프록시가 죽어 있으면
@@ -209,14 +244,21 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 fn main() {
     // Ctrl+Shift+O — 초안 READ.ME가 지정했던 오버레이 모드 단축키.
     let overlay_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyO);
+    // Ctrl+Shift+H — HUD 소환/숨김 (작업표시줄 없이 호출·닫기).
+    let summon_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyH);
 
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     // Pressed만 처리 — Released까지 받으면 한 번 누름에 두 번 토글된다.
-                    if event.state() == ShortcutState::Pressed && shortcut == &overlay_shortcut {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if shortcut == &overlay_shortcut {
                         toggle_click_through_internal(app);
+                    } else if shortcut == &summon_shortcut {
+                        toggle_visibility(app);
                     }
                 })
                 .build(),
@@ -247,24 +289,22 @@ fn main() {
             if let Err(e) = app.global_shortcut().register(overlay_shortcut) {
                 eprintln!("global shortcut Ctrl+Shift+O 등록 실패: {e} (트레이 메뉴로 대체 가능)");
             }
+            if let Err(e) = app.global_shortcut().register(summon_shortcut) {
+                eprintln!("global shortcut Ctrl+Shift+H 등록 실패: {e} (트레이 메뉴로 대체 가능)");
+            }
+            // 이전 실행이 남긴 제어 파일 제거 — 시작하자마자 숨거나 종료되는 사고 방지.
+            if let Some(p) = control_file() {
+                let _ = std::fs::remove_file(p);
+            }
 
             // 수집 루프 — UI와 분리된 백그라운드 스레드 (README §4.4).
             std::thread::spawn(move || {
                 let mut collectors = orbit_core::default_collectors();
-                // 파일 감시 이벤트를 새로고침 채널로 합류 (수동 새로고침과 동일 경로).
-                let watch = orbit_core::watch::watch_sources(&collectors);
-                if let Some(w) = watch {
-                    let fwd = tick_tx.clone();
-                    std::thread::spawn(move || {
-                        // _watcher가 이 스레드에 살아 있어야 감시가 유지된다.
-                        while let Ok(()) = w.rx.recv() {
-                            if fwd.send(()).is_err() {
-                                break;
-                            }
-                        }
-                    });
-                }
+                // 파일 감시 → 새로고침 채널 직결 (중계 스레드 없음 — 그 자체가 실패 지점이었다).
+                // 반환된 watcher는 드롭되면 감시가 멈추므로 루프가 사는 동안 붙들어 둔다.
+                let _watcher = orbit_core::watch::watch_sources_into(&collectors, tick_tx.clone());
                 loop {
+                    handle_control(&handle);
                     let view = orbit_core::aggregate::collect_all(&mut collectors);
                     // 사용자 설정(서비스 토글)을 뷰에 동봉 — UI가 필터와 설정 메뉴에 사용.
                     let enabled = handle

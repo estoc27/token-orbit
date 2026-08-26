@@ -67,8 +67,28 @@ cargo build --release -p token-orbit
 The HUD appears as a small always-on-top overlay:
 
 - **Drag** anywhere to move · **Esc** to quit · **Ctrl+Shift+O** toggles click-through
+- **Ctrl+Shift+H** summons/dismisses the HUD from anywhere
 - Tray icon: show/hide, click-through, quit
 - Codex usage appears with zero configuration if Codex is installed
+- No taskbar entry — control it via tray, hotkeys, or `scripts/orbit.cmd`
+
+### Scripted / editor control
+
+`scripts/orbit.cmd [toggle|show|hide|quit|start]` drives the HUD through a
+watched control file (`~/.token-orbit/control`) — no ports. Wire it to a
+Claude Code slash command by dropping a file at `~/.claude/commands/orbit.md`:
+
+```markdown
+---
+description: Token Orbit HUD control
+allowed-tools: Bash(cmd //c *), Bash(cmd /c *)
+---
+!`cmd //c "C:/path/to/token-orbit/scripts/orbit.cmd" $ARGUMENTS`
+
+Report the command output in one line.
+```
+
+Then `/orbit`, `/orbit hide`, `/orbit quit` work from any Claude Code session.
 
 ### Claude usage % (optional, recommended)
 
