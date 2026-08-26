@@ -11,7 +11,13 @@ const WARN_PCT = 80;
 const CRIT_PCT = 90;
 const STALE_SECS = 30 * 60;
 
-event.listen("usage://update", (e) => render(e.payload));
+// 페이로드: { view: AggregatedView, enabled: {service_key: bool} }
+let last = null; // 마지막 페이로드 — 토글 즉시 반영과 설정 메뉴 렌더에 사용
+event.listen("usage://update", (e) => {
+  last = e.payload;
+  render(last);
+  renderServiceToggles(last);
+});
 
 // 어디를 잡아도 창 이동. data-tauri-drag-region은 자식 요소 클릭을 못 받아서
 // (카드가 화면을 꽉 채우면 잡을 곳이 없음) startDragging을 직접 호출한다.
@@ -38,6 +44,7 @@ document.getElementById("gear").addEventListener("click", () => {
 function hideMenu() { menuEl.hidden = true; }
 
 menuEl.addEventListener("click", async (e) => {
+  if (e.target.closest("#service-toggles")) return; // 체크박스는 메뉴를 닫지 않는다
   const act = e.target.closest(".menu-item")?.dataset.act;
   if (!act) return;
   hideMenu();
@@ -53,19 +60,64 @@ menuEl.addEventListener("click", async (e) => {
   }
 });
 
+// 수동 새로고침 — 수집 루프를 즉시 깨운다. 로컬 파일 재수집이며,
+// 서버 상태 자체는 트래픽이 흘러야 갱신된다 (버튼이 마법을 부리지 않는다).
+document.getElementById("refresh").addEventListener("click", (e) => {
+  const btn = e.currentTarget;
+  btn.classList.remove("spin");
+  void btn.offsetWidth; // 애니메이션 재시작
+  btn.classList.add("spin");
+  core.invoke("refresh_now").catch(() => {});
+});
+
+// 서비스 토글 — 저장 후 즉시 로컬 반영 (다음 tick을 기다리지 않는다).
+document.getElementById("service-toggles").addEventListener("change", async (e) => {
+  const svc = e.target?.dataset?.svc;
+  if (!svc) return;
+  const on = e.target.checked;
+  try { await core.invoke("set_service_enabled", { service: svc, enabled: on }); } catch (_) {}
+  if (last) {
+    (last.enabled ||= {})[svc] = on;
+    render(last);
+  }
+});
+
 // 투과 상태는 셸이 알려준다 (전역 단축키·트레이로도 바뀌므로 UI가 단독 판단하면 어긋남).
 event.listen("hud://click-through", (e) => {
   document.body.classList.toggle("ghost", !!e.payload);
 });
 
-function render(view) {
-  if (!view || !view.cards || view.cards.length === 0) {
-    cardsEl.innerHTML = `<div class="card placeholder">감지된 소스 없음</div>`;
+function render(payload) {
+  const cards = payload?.view?.cards ?? [];
+  const enabled = payload?.enabled ?? {};
+  // 토글이 꺼진 서비스는 그리지 않는다 (목록에 없으면 기본 표시).
+  const visible = cards.filter((c) => enabled[c.source_id] !== false);
+  if (visible.length === 0) {
+    cardsEl.innerHTML = cards.length === 0
+      ? `<div class="card placeholder">감지된 소스 없음</div>`
+      : `<div class="card placeholder">모든 서비스 숨김 (⚙ 메뉴에서 선택)</div>`;
     autoResize();
     return;
   }
-  cardsEl.innerHTML = view.cards.map(cardHtml).join("");
+  cardsEl.innerHTML = visible.map(cardHtml).join("");
   autoResize();
+}
+
+// 설정 메뉴의 서비스 체크박스 — 감지된 서비스가 자동으로 나열된다.
+function renderServiceToggles(payload) {
+  const box = document.getElementById("service-toggles");
+  const cards = payload?.view?.cards ?? [];
+  const enabled = payload?.enabled ?? {};
+  if (cards.length === 0) {
+    box.innerHTML = `<div class="menu-label">감지된 서비스 없음</div>`;
+    return;
+  }
+  box.innerHTML = cards
+    .map((c) => {
+      const on = enabled[c.source_id] !== false;
+      return `<label class="svc-toggle"><input type="checkbox" data-svc="${esc(c.source_id)}" ${on ? "checked" : ""}> ${esc(c.display_name)}</label>`;
+    })
+    .join("");
 }
 
 // 내용 높이에 맞춰 창 크기 조절 — 카드가 잘리지 않게.

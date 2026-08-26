@@ -5,7 +5,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -13,6 +14,42 @@ use tauri::{
     AppHandle, Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+/// 사용자 설정 — `~/.token-orbit/settings.json`.
+/// 서비스 토글처럼 앱이 관리하는 값. (statusline tap 파일들과 같은 디렉터리)
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
+struct UserSettings {
+    /// service_key → 표시 여부. 목록에 없으면 기본 true (새 서비스는 자동 표시).
+    #[serde(default)]
+    enabled_services: HashMap<String, bool>,
+}
+
+fn settings_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|h| std::path::PathBuf::from(h).join(".token-orbit").join("settings.json"))
+}
+
+fn load_settings() -> UserSettings {
+    settings_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(s: &UserSettings) {
+    let Some(path) = settings_path() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(s) {
+        // 원자적 쓰기 — 절반 쓰인 설정 파일을 읽지 않게.
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
 
 /// 수집 루프 주기. 파일 감시(`notify`)가 이벤트를 주면 즉시 깨어나고,
 /// 이 값은 감시가 놓친 변경에 대한 안전망(heartbeat)으로만 쓰인다.
@@ -23,6 +60,36 @@ const HUD: &str = "hud";
 
 struct HudState {
     click_through: Mutex<bool>,
+    settings: Mutex<UserSettings>,
+    /// 수집 루프를 즉시 깨우는 채널 (수동 새로고침 버튼).
+    refresh_tx: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+#[tauri::command]
+fn get_settings(state: tauri::State<'_, HudState>) -> Result<UserSettings, String> {
+    Ok(state.settings.lock().map_err(|e| e.to_string())?.clone())
+}
+
+#[tauri::command]
+fn set_service_enabled(
+    state: tauri::State<'_, HudState>,
+    service: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut s = state.settings.lock().map_err(|e| e.to_string())?;
+    s.enabled_services.insert(service, enabled);
+    save_settings(&s);
+    Ok(())
+}
+
+/// 수동 새로고침 — 수집 루프를 즉시 깨운다.
+/// 로컬 파일을 다시 읽는 것이므로, 서버 상태 자체는 트래픽이 흘러야 갱신된다.
+#[tauri::command]
+fn refresh_now(state: tauri::State<'_, HudState>) -> Result<(), String> {
+    if let Some(tx) = state.refresh_tx.lock().map_err(|e| e.to_string())?.as_ref() {
+        let _ = tx.send(());
+    }
+    Ok(())
 }
 
 /// 클릭 투과 전환. 커맨드·트레이·전역 단축키가 모두 이 하나를 부른다.
@@ -154,12 +221,26 @@ fn main() {
                 })
                 .build(),
         )
-        .manage(HudState { click_through: Mutex::new(false) })
-        .invoke_handler(tauri::generate_handler![toggle_click_through, set_always_on_top])
+        .manage(HudState {
+            click_through: Mutex::new(false),
+            settings: Mutex::new(load_settings()),
+            refresh_tx: Mutex::new(None),
+        })
+        .invoke_handler(tauri::generate_handler![
+            toggle_click_through,
+            set_always_on_top,
+            get_settings,
+            set_service_enabled,
+            refresh_now
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
             build_tray(&handle)?;
             spawn_proxy_tap();
+
+            // 새로고침 채널: 파일 감시 이벤트와 수동 새로고침이 같은 채널로 합류한다.
+            let (tick_tx, tick_rx) = mpsc::channel::<()>();
+            *app.state::<HudState>().refresh_tx.lock().unwrap() = Some(tick_tx.clone());
 
             // 단축키 등록 실패는 치명적이지 않다(다른 앱이 선점했을 수 있음).
             // 트레이 메뉴라는 대체 경로가 있으므로 로그만 남기고 계속 진행 — fail-open.
@@ -170,23 +251,37 @@ fn main() {
             // 수집 루프 — UI와 분리된 백그라운드 스레드 (README §4.4).
             std::thread::spawn(move || {
                 let mut collectors = orbit_core::default_collectors();
+                // 파일 감시 이벤트를 새로고침 채널로 합류 (수동 새로고침과 동일 경로).
                 let watch = orbit_core::watch::watch_sources(&collectors);
+                if let Some(w) = watch {
+                    let fwd = tick_tx.clone();
+                    std::thread::spawn(move || {
+                        // _watcher가 이 스레드에 살아 있어야 감시가 유지된다.
+                        while let Ok(()) = w.rx.recv() {
+                            if fwd.send(()).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
                 loop {
                     let view = orbit_core::aggregate::collect_all(&mut collectors);
+                    // 사용자 설정(서비스 토글)을 뷰에 동봉 — UI가 필터와 설정 메뉴에 사용.
+                    let enabled = handle
+                        .state::<HudState>()
+                        .settings
+                        .lock()
+                        .map(|s| s.enabled_services.clone())
+                        .unwrap_or_default();
+                    let payload = serde_json::json!({ "view": view, "enabled": enabled });
                     // 수신자(HUD)가 없어도 루프는 계속 — fail-open.
-                    let _ = handle.emit("usage://update", &view);
+                    let _ = handle.emit("usage://update", &payload);
 
-                    // 파일 변경이 오면 즉시 재수집, 없으면 heartbeat까지 대기.
-                    // 감시가 없거나 죽어도 heartbeat가 폴링처럼 동작한다.
-                    match &watch {
-                        Some(w) => {
-                            let _ = w.rx.recv_timeout(Duration::from_secs(HEARTBEAT_SECS));
-                            // 연쇄 이벤트(한 턴에 여러 번 append) 흡수 — 디바운스.
-                            std::thread::sleep(Duration::from_millis(300));
-                            while w.rx.try_recv().is_ok() {}
-                        }
-                        None => std::thread::sleep(Duration::from_secs(5)),
-                    }
+                    // 파일 변경/수동 새로고침이 오면 즉시 재수집, 없으면 heartbeat까지 대기.
+                    let _ = tick_rx.recv_timeout(Duration::from_secs(HEARTBEAT_SECS));
+                    // 연쇄 이벤트(한 턴에 여러 번 append) 흡수 — 디바운스.
+                    std::thread::sleep(Duration::from_millis(300));
+                    while tick_rx.try_recv().is_ok() {}
                 }
             });
             Ok(())

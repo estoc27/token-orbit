@@ -100,6 +100,23 @@ The statusline reflects one session's last API response, so it can lag. The prox
 
 Captured values persist per bucket with their own timestamps, so the Fable window stays visible even when you are not using that model. Stale values show their age instead of pretending to be current.
 
+### API-key usage (OpenAI, Anthropic)
+
+The same proxy exposes provider mounts — route any SDK/tool through it and its
+rate-limit headers appear as a card automatically (cards only show for services
+with observed data):
+
+```
+ANTHROPIC_BASE_URL=http://127.0.0.1:8377/anthropic
+OPENAI_BASE_URL=http://127.0.0.1:8377/openai/v1
+```
+
+### Choosing what to monitor
+
+The gear menu lists every detected service with a checkbox — auto-detected,
+individually toggleable, persisted to `~/.token-orbit/settings.json`.
+The ↻ button forces an immediate re-collect.
+
 ## Design principles
 
 - **Honesty over completeness** — unknown values are never fabricated; stale data shows its age; estimated values are visually distinct from exact ones

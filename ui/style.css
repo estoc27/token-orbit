@@ -37,6 +37,31 @@ body {
   padding: 0 4px;
 }
 #gear:hover { color: #fff; }
+#refresh {
+  all: unset;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 16px;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 0 4px;
+}
+#refresh:hover { color: #fff; }
+#refresh.spin { animation: spin 0.6s linear; }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+.menu-sep { height: 1px; background: rgba(255,255,255,0.12); margin: 4px 2px; }
+.menu-label { font-size: 9px; color: #888; padding: 2px 8px; }
+.svc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #ddd;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.svc-toggle:hover { background: rgba(255,255,255,0.12); }
+.svc-toggle input { accent-color: #4caf82; }
 #menu {
   position: absolute;
   top: 18px;

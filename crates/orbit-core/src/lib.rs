@@ -18,5 +18,6 @@ pub fn default_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(collectors::claude_proxy::ClaudeProxyCollector::new()),
         Box::new(collectors::claude_statusline::ClaudeStatuslineCollector::new()),
         Box::new(collectors::claude_jsonl::ClaudeJsonlCollector::new()),
+        Box::new(collectors::openai_proxy::OpenAiProxyCollector::new()),
     ]
 }
