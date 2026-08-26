@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # 코어(수집·집계)는 UI 없이 단독 검증 가능하다 — 설계상의 분리가 CI를 가볍게 한다.
+      - name: Test core
+        run: cargo test -p orbit-core
+
+      - name: Check shell
+        run: cargo check -p token-orbit

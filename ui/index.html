@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Token Orbit</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="hud">
+    <div id="topbar">
+      <button id="gear" title="메뉴">⚙</button>
+      <div id="menu" hidden>
+        <button class="menu-item" data-act="pin">📌 항상 위 <span id="pin-state">켜짐</span></button>
+        <button class="menu-item" data-act="ghost">👻 클릭 투과 <span class="hint-key">Ctrl+Shift+O</span></button>
+        <button class="menu-item" data-act="quit">✕ 종료</button>
+      </div>
+    </div>
+    <div id="cards">
+      <div class="card placeholder">수집 대기 중…</div>
+    </div>
+    <div id="hint">드래그: 이동 · Esc: 종료 · Ctrl+Shift+O: 투과</div>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

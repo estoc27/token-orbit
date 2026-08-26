@@ -1,0 +1,148 @@
+/* Token Orbit HUD — §5.0 공통 프레임.
+   게이지가 숫자보다 먼저 읽혀야 한다. 흘깃 보는 용도. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { background: transparent; overflow: hidden; }
+
+body {
+  font-family: "Segoe UI", -apple-system, sans-serif;
+  font-size: 12px;
+  color: #ececec;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#hud {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 상단 바 — 톱니바퀴 메뉴 */
+#topbar {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  height: 16px;
+  margin-bottom: -4px;
+}
+#gear {
+  all: unset;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 16px;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 0 4px;
+}
+#gear:hover { color: #fff; }
+#menu {
+  position: absolute;
+  top: 18px;
+  right: 0;
+  z-index: 10;
+  background: rgba(28, 28, 34, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+}
+#menu[hidden] { display: none; }
+.menu-item {
+  all: unset;
+  cursor: pointer;
+  font-size: 11px;
+  color: #ddd;
+  padding: 5px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.menu-item:hover { background: rgba(255, 255, 255, 0.12); }
+#pin-state { color: #4caf82; font-size: 10px; }
+.hint-key { color: #777; font-size: 9px; }
+
+/* 클릭 투과 중 — 마우스가 닿지 않는 상태임을 시각적으로 알린다.
+   이 표시가 없으면 사용자는 앱이 멈춘 줄 안다. */
+body.ghost .card { opacity: 0.75; border-style: dashed; }
+body.ghost #hint::after { content: " · 투과 중"; color: #e6b422; }
+
+.card {
+  background: rgba(20, 20, 24, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.card.placeholder { color: #888; text-align: center; }
+
+/* staleness — 낡은 값을 현재값처럼 보이게 하지 않는다 (§3) */
+.card.stale { opacity: 0.55; }
+.card.degraded { border-color: rgba(255, 180, 60, 0.5); }
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.svc-name { font-weight: 600; font-size: 13px; }
+.plan-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  text-transform: capitalize;
+}
+.age { margin-left: auto; font-size: 10px; color: #999; }
+
+/* 창(window) 행 — 첫 번째(가장 임박)가 크고, 나머지는 한 줄 요약 */
+.win { margin-top: 4px; }
+.win .bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bar {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+}
+
+.win.minor .bar { height: 4px; }
+.bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #4caf82;
+  transition: width 0.4s;
+}
+.bar-fill.warn { background: #e6b422; }
+.bar-fill.crit { background: #e05d5d; }
+/* confidence: Exact가 아닌 값은 점선 질감으로 구분 (§3 규칙 1) */
+.bar-fill.derived {
+  background-image: repeating-linear-gradient(
+    45deg, transparent, transparent 3px,
+    rgba(0, 0, 0, 0.25) 3px, rgba(0, 0, 0, 0.25) 6px);
+}
+.pct { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 34px; text-align: right; }
+.win-meta { font-size: 10px; color: #aaa; margin-top: 2px; }
+.quota-note { font-size: 9px; color: #9a7fb8; margin-top: 1px; }
+
+.tokens-line, .cost-line { font-size: 11px; color: #ccc; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+.setup-hint { font-size: 10px; color: #8fb6e0; margin-top: 3px; }
+
+.activity-note { font-size: 10px; color: #e6b422; margin-top: 3px; }
+
+#hint {
+  text-align: center;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.win-age { color: #e6b422; }
