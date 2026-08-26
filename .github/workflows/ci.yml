@@ -6,16 +6,23 @@ on:
   pull_request:
 
 jobs:
-  test:
+  # 코어(수집·집계)는 UI 없이 OS 중립으로 설계됐다 — 세 OS에서 기계적으로 보증한다.
+  # (macOS/Linux 셸 포팅 전이라도 코어의 이식성은 지금부터 검증)
+  core:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p orbit-core
+
+  shell:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-
-      # 코어(수집·집계)는 UI 없이 단독 검증 가능하다 — 설계상의 분리가 CI를 가볍게 한다.
-      - name: Test core
-        run: cargo test -p orbit-core
-
-      - name: Check shell
-        run: cargo check -p token-orbit
+      - run: cargo check -p token-orbit

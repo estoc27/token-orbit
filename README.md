@@ -30,7 +30,20 @@ Everything runs locally. No telemetry, no external servers, no debug ports, no c
 
 ## Status
 
-**Early development (M0).** Windows only. Expect manual setup steps. macOS/Linux are on the [roadmap](docs/DESIGN.md#7-로드맵).
+**Early development (M0).** Expect manual setup steps.
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| HUD app | ✅ supported | planned (core is OS-neutral, needs testing) | planned (X11 first) |
+| Core library CI | ✅ | ✅ tested | ✅ tested |
+
+**Services**: Codex and Claude are supported — both verified against real data.
+Planned / community-welcome: Gemini CLI, GitHub Copilot, Cursor, API-key usage
+(OpenAI/Anthropic — the proxy pattern already captures headers). Microsoft Copilot
+was investigated and is not feasible (no local data, no extension points — see
+[docs/DESIGN.md](docs/DESIGN.md)). New services plug in via the `Collector` trait;
+the [design doc](docs/DESIGN.md) records the investigation method (official
+extension points first, then local files — never debug ports or scraping).
 
 ## Requirements
 
