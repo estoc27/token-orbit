@@ -181,12 +181,20 @@ pub fn collect_all(collectors: &mut [Box<dyn Collector>]) -> AggregatedView {
         .filter_map(|k| map.remove(k))
         .map(|(mut card, percent_obs, any_obs)| {
             // 같은 창을 여러 소스가 줄 수 있다 (프록시와 statusline 모두 5h/7d 제공).
-            // 권위가 높은 소스를 남기고, 같은 권위면 최근 관측을 남긴다.
+            //
+            // 권위는 **신선할 때만** 유효하다. 순수 authority 정렬은 9시간 묵은
+            // 프록시 값이 더 신선한 statusline 값을 영원히 가리는 사고를 냈다 (실측).
+            // 규칙: 둘 다 신선(≤10분)하면 권위 우선, 아니면 최근 관측 우선.
             card.windows.sort_by(|a, b| {
-                a.label
-                    .cmp(&b.label)
-                    .then(b.authority.cmp(&a.authority))
-                    .then(b.observed_at.cmp(&a.observed_at))
+                a.label.cmp(&b.label).then_with(|| {
+                    let both_fresh =
+                        a.age_secs <= AUTHORITY_FRESH_SECS && b.age_secs <= AUTHORITY_FRESH_SECS;
+                    if both_fresh {
+                        b.authority.cmp(&a.authority).then(b.observed_at.cmp(&a.observed_at))
+                    } else {
+                        b.observed_at.cmp(&a.observed_at).then(b.authority.cmp(&a.authority))
+                    }
+                })
             });
             card.windows.dedup_by(|a, b| a.label == b.label);
             // 가장 임박한 리셋이 앞으로. 리셋 미상은 뒤로.
@@ -210,6 +218,9 @@ pub fn collect_all(collectors: &mut [Box<dyn Collector>]) -> AggregatedView {
 /// 앵커 이후 소모 판정 여유 (초). 정상 갱신 지터를 소모로 오인하지 않기 위함.
 const ACTIVITY_MARGIN_SECS: i64 = 60;
 
+/// 소스 권위가 유효한 신선도 (초). 이보다 낡은 관측은 권위를 잃고 최신성으로 겨룬다.
+const AUTHORITY_FRESH_SECS: i64 = 10 * 60;
+
 fn health_rank(h: &Health) -> u8 {
     match h {
         Health::Ok => 0,
@@ -231,6 +242,44 @@ fn window_label(minutes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_authority_loses_to_fresh_source() {
+        // 회귀: 9시간 묵은 고권위(프록시) 창이 신선한 저권위(statusline) 창을 가렸던 버그.
+        let mk = |authority: u8, age: i64, pct: f64| WindowView {
+            label: "5h".into(),
+            used_percent: pct,
+            resets_at: None,
+            resets_in_secs: None,
+            confidence: Confidence::Exact,
+            age_secs: age,
+            observed_at: 100_000 - age,
+            authority,
+        };
+        let sort_dedup = |mut v: Vec<WindowView>| {
+            v.sort_by(|a, b| {
+                a.label.cmp(&b.label).then_with(|| {
+                    let both_fresh =
+                        a.age_secs <= AUTHORITY_FRESH_SECS && b.age_secs <= AUTHORITY_FRESH_SECS;
+                    if both_fresh {
+                        b.authority.cmp(&a.authority).then(b.observed_at.cmp(&a.observed_at))
+                    } else {
+                        b.observed_at.cmp(&a.observed_at).then(b.authority.cmp(&a.authority))
+                    }
+                })
+            });
+            v.dedup_by(|a, b| a.label == b.label);
+            v
+        };
+
+        // 케이스 1: 프록시 9시간 묵음 vs statusline 5분 — 신선한 쪽이 이겨야 한다.
+        let v = sort_dedup(vec![mk(10, 9 * 3600, 54.0), mk(5, 300, 16.0)]);
+        assert_eq!(v[0].used_percent, 16.0);
+
+        // 케이스 2: 둘 다 신선 — 권위(프록시)가 이긴다.
+        let v = sort_dedup(vec![mk(5, 30, 16.0), mk(10, 60, 54.0)]);
+        assert_eq!(v[0].used_percent, 54.0);
+    }
 
     #[test]
     fn window_labels() {

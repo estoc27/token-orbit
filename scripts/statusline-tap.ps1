@@ -14,15 +14,22 @@
 
 $ErrorActionPreference = 'SilentlyContinue'
 
-$json = [Console]::In.ReadToEnd()
+# stdin을 **바이트 그대로** 읽는다. [Console]::In.ReadToEnd()는 PowerShell 5.1에서
+# 콘솔 코드페이지로 디코드해 UTF-8 한글(예: 세션 이름)을 파손시키고, 그 과정에서
+# JSON 구조 자체가 깨질 수 있다 (실측: 따옴표 소실로 파싱 불가 파일 생성).
+$stdin = [Console]::OpenStandardInput()
+$ms = New-Object IO.MemoryStream
+$stdin.CopyTo($ms)
+$bytes = $ms.ToArray()
+$json = [Text.Encoding]::UTF8.GetString($bytes)
 
 $dir = Join-Path $env:USERPROFILE '.token-orbit'
 if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
 
-# 원자적 쓰기: tmp에 쓴 뒤 rename. Token_Orbit이 절반 쓰인 파일을 읽는 일을 방지.
+# 원자적 쓰기: tmp에 쓴 뒤 rename. 받은 바이트를 재인코딩 없이 그대로 기록한다.
 $tmp = Join-Path $dir 'claude-code.json.tmp'
 $dst = Join-Path $dir 'claude-code.json'
-[IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllBytes($tmp, $bytes)
 Move-Item -Force $tmp $dst
 
 # 사용자 상태줄 출력 — 기존 statusline을 쓰고 있었다면 설치기가 이 부분을 래핑한다 (M0 TODO).
