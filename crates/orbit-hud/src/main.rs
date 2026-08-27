@@ -334,6 +334,7 @@ impl eframe::App for HudApp {
             pos_locked: self.settings.pos_locked,
             click_through: CLICK_THROUGH.load(std::sync::atomic::Ordering::SeqCst),
             opacity: self.settings.opacity,
+            enabled: &self.settings.enabled_services,
         };
 
         let mut action = None;
@@ -409,6 +410,12 @@ impl eframe::App for HudApp {
             Some(ui::Action::ToggleClickThrough) => {
                 toggle_click_through_global();
                 self.menu_open = false; // 투과되면 메뉴도 못 누르므로 닫아준다
+            }
+            Some(ui::Action::ToggleService(key)) => {
+                let on = self.settings.enabled_services.get(&key).copied().unwrap_or(true);
+                self.settings.enabled_services.insert(key, !on);
+                self.settings.save();
+                self.last_height = 0.0; // 카드가 빠지면 높이 재측정
             }
             Some(ui::Action::SetOpacity(o)) => {
                 self.settings.opacity = o;

@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 use orbit_core::aggregate::{AggregatedView, ServiceCard, WindowView};
 
 /// UI에서 발생한 사용자 액션 — main이 처리한다.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Action {
     Refresh,
     ToggleMenu,
@@ -14,6 +14,8 @@ pub enum Action {
     TogglePosLock,
     ToggleClickThrough,
     SetOpacity(f32),
+    /// service_key 하나의 표시 여부를 뒤집는다.
+    ToggleService(String),
     Quit,
 }
 
@@ -27,11 +29,19 @@ pub struct RenderResult {
 
 /// 현재 설정 스냅샷 — 메뉴 체크 표시용.
 #[derive(Clone, Copy)]
-pub struct SettingsView {
+pub struct SettingsView<'a> {
     pub always_on_top: bool,
     pub pos_locked: bool,
     pub click_through: bool,
     pub opacity: f32,
+    /// service_key → 표시 여부. 목록에 없으면 표시(새 서비스는 자동 노출).
+    pub enabled: &'a std::collections::HashMap<String, bool>,
+}
+
+impl SettingsView<'_> {
+    fn shows(&self, key: &str) -> bool {
+        self.enabled.get(key).copied().unwrap_or(true)
+    }
 }
 
 /// 한 프레임을 그리고, 클릭된 액션과 콘텐츠 높이를 반환한다.
@@ -39,7 +49,7 @@ pub fn render(
     ui: &mut egui::Ui,
     view: Option<&AggregatedView>,
     menu_open: bool,
-    settings: SettingsView,
+    settings: SettingsView<'_>,
 ) -> RenderResult {
     OPACITY.with(|o| o.set(settings.opacity));
     let mut action = None;
@@ -66,7 +76,8 @@ pub fn render(
             .fixed_pos(menu_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
-                if let Some(a) = menu_ui(ui, settings) {
+                let cards = view.map(|v| v.cards.as_slice()).unwrap_or(&[]);
+                if let Some(a) = menu_ui(ui, settings, cards) {
                     action = Some(a);
                 }
             });
@@ -77,8 +88,14 @@ pub fn render(
         None => placeholder(ui, "수집 대기 중…"),
         Some(v) if v.cards.is_empty() => placeholder(ui, "감지된 소스 없음"),
         Some(v) => {
-            for card in &v.cards {
-                card_ui(ui, card);
+            let visible: Vec<&ServiceCard> =
+                v.cards.iter().filter(|c| settings.shows(&c.source_id)).collect();
+            if visible.is_empty() {
+                placeholder(ui, "모든 서비스 숨김 (⚙ 메뉴에서 선택)");
+            } else {
+                for card in visible {
+                    card_ui(ui, card);
+                }
             }
         }
     }
@@ -127,7 +144,7 @@ fn icon_button(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
     resp
 }
 
-fn menu_ui(ui: &mut egui::Ui, s: SettingsView) -> Option<Action> {
+fn menu_ui(ui: &mut egui::Ui, s: SettingsView<'_>, cards: &[ServiceCard]) -> Option<Action> {
     let mut action = None;
     egui::Frame::none()
         .fill(Color32::from_rgb(28, 28, 34))
@@ -158,7 +175,24 @@ fn menu_ui(ui: &mut egui::Ui, s: SettingsView) -> Option<Action> {
                 action = Some(Action::SetOpacity(op));
             }
 
+            // 감지된 서비스 — 자동 나열, 개별 토글.
             ui.add_space(4.0);
+            separator(ui);
+            ui.label(RichText::new("모니터링").size(9.0).color(theme::TEXT_FAINT));
+            if cards.is_empty() {
+                ui.label(RichText::new("감지된 서비스 없음").size(10.0).color(theme::TEXT_FAINT));
+            } else {
+                for c in cards {
+                    let on = s.shows(&c.source_id);
+                    let mark = if on { "☑" } else { "☐" };
+                    if menu_item(ui, &format!("{mark} {}", c.display_name)) {
+                        action = Some(Action::ToggleService(c.source_id.clone()));
+                    }
+                }
+            }
+
+            ui.add_space(4.0);
+            separator(ui);
             if menu_item(ui, "↻ 지금 새로고침") {
                 action = Some(Action::Refresh);
             }
@@ -167,6 +201,13 @@ fn menu_ui(ui: &mut egui::Ui, s: SettingsView) -> Option<Action> {
             }
         });
     action
+}
+
+fn separator(ui: &mut egui::Ui) {
+    let w = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, Rounding::ZERO, theme::CARD_BORDER);
+    ui.add_space(3.0);
 }
 
 fn menu_item(ui: &mut egui::Ui, text: &str) -> bool {
