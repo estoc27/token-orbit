@@ -8,6 +8,8 @@
 
 mod settings;
 mod theme;
+#[cfg(windows)]
+mod tray;
 mod ui;
 
 use settings::Settings;
@@ -168,6 +170,9 @@ struct HudApp {
     needs_restore: bool,
     /// 전역 단축키 등록을 살려두는 핸들.
     _hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
+    /// 트레이 아이콘 — drop되면 아이콘이 사라지므로 붙잡아 둔다.
+    #[cfg(windows)]
+    _tray: Option<tray_icon::TrayIcon>,
 }
 
 impl HudApp {
@@ -281,6 +286,22 @@ impl HudApp {
             });
         }
 
+        // 트레이 — 창이 작업표시줄에 없으므로 마우스로 닿는 유일한 상시 접점.
+        // 명령은 여기서 직접 처리한다 (숨김·투과 상태에서도 동작해야 하므로).
+        #[cfg(windows)]
+        let tray = {
+            let ctx = cc.egui_ctx.clone();
+            tray::install(move |cmd| {
+                match cmd {
+                    tray::TrayCmd::Toggle => win32::set_visible(!win32::is_visible()),
+                    tray::TrayCmd::ClickThrough => toggle_click_through_global(),
+                    tray::TrayCmd::Refresh => trigger_observer(),
+                    tray::TrayCmd::Quit => std::process::exit(0),
+                }
+                ctx.request_repaint();
+            })
+        };
+
         Self {
             rx,
             view: None,
@@ -289,6 +310,8 @@ impl HudApp {
             settings,
             needs_restore: true,
             _hotkeys: hotkeys,
+            #[cfg(windows)]
+            _tray: tray,
         }
     }
 
