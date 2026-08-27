@@ -146,18 +146,19 @@ function renderServiceToggles(payload) {
 // transform은 레이아웃 계측에 영향을 주지 않아 루프가 생기지 않는다.
 const BASE_W = 320;
 let scale = 1;
-function applyScale() {
-  scale = Math.min(2.5, Math.max(0.6, window.innerWidth / BASE_W));
+function applyScale(widthOverride) {
+  const w = widthOverride || window.innerWidth;
+  scale = Math.min(2.5, Math.max(0.6, w / BASE_W));
   const hud = document.getElementById("hud");
   hud.style.transformOrigin = "0 0";
   hud.style.transform = `scale(${scale})`;
   // 스케일된 결과가 창 폭을 정확히 채우도록 레이아웃 폭을 역보정한다.
-  hud.style.width = `${window.innerWidth / scale}px`;
+  hud.style.width = `${w / scale}px`;
 }
-window.addEventListener("resize", () => {
-  applyScale();
-  autoResize();
-});
+// resize 이벤트에서 autoResize를 부르지 않는다 — autoResize의 setSize가
+// 다시 resize를 유발하는 되먹임 루프(움찔거림·렉)를 끊기 위함.
+// 스케일만 갱신하고, 높이 확정은 렌더/드래그 종료 시점에만 한다.
+window.addEventListener("resize", () => applyScale());
 applyScale();
 
 // ---- 모서리 그립 리사이즈 ----
@@ -173,18 +174,27 @@ applyScale();
     rs = { x: e.screenX, w: window.innerWidth, h: window.innerHeight, id: e.pointerId };
     try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
   });
+  let moveScheduled = false;
+  let pendingW = 0;
   document.addEventListener("pointermove", (e) => {
     if (!rs) return;
-    const newW = Math.min(800, Math.max(192, rs.w + (e.screenX - rs.x)));
-    const newH = Math.max(60, Math.round((rs.h * newW) / rs.w));
-    appWindow.setSize(new tauriWin.LogicalSize(newW, newH)).catch(() => {});
+    pendingW = Math.min(800, Math.max(192, rs.w + (e.screenX - rs.x)));
+    if (moveScheduled) return;
+    moveScheduled = true;
+    // 드래그 중에는 **폭만** 바꾼다 (높이는 rs.h 유지). 높이 확정은 종료 시 1회.
+    // rAF로 코얼레스해 pointermove 연사가 IPC 폭주로 이어지지 않게 한다.
+    requestAnimationFrame(() => {
+      moveScheduled = false;
+      if (!rs) return;
+      applyScale(pendingW); // 폭에 맞춰 스케일만 즉시 반영 (GPU 렌더)
+      appWindow.setSize(new tauriWin.LogicalSize(pendingW, rs.h)).catch(() => {});
+    });
   });
   const end = () => {
     if (!rs) return;
     rs = null;
-    applyScale();
     lastH = 0; // 강제 재측정
-    autoResize();
+    autoResize(); // 최종 높이를 내용에 맞춰 한 번만 확정
   };
   document.addEventListener("pointerup", end);
   document.addEventListener("pointercancel", end);
@@ -193,14 +203,21 @@ applyScale();
 // 내용 높이에 맞춰 창 높이 자동 조절 — 카드가 잘리지 않게.
 // getBoundingClientRect는 transform이 반영된 실제 렌더 크기를 준다.
 let lastH = 0;
-async function autoResize() {
-  const hud = document.getElementById("hud");
-  const need = Math.ceil(hud.getBoundingClientRect().height) + 4;
-  if (Math.abs(need - lastH) < 3) return; // 미세 변동으로 인한 루프 방지
-  lastH = need;
-  try {
-    await appWindow.setSize(new tauriWin.LogicalSize(window.innerWidth, need));
-  } catch (_) {}
+let resizePending = false;
+function autoResize() {
+  if (resizePending) return;
+  resizePending = true;
+  requestAnimationFrame(async () => {
+    resizePending = false;
+    const hud = document.getElementById("hud");
+    const need = Math.ceil(hud.getBoundingClientRect().height) + 4;
+    // 히스테리시스 6px — 근사·확정 높이의 미세 차이로 창이 튀지 않게.
+    if (Math.abs(need - lastH) < 6) return;
+    lastH = need;
+    try {
+      await appWindow.setSize(new tauriWin.LogicalSize(window.innerWidth, need));
+    } catch (_) {}
+  });
 }
 
 function cardHtml(c) {
