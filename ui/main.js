@@ -185,7 +185,7 @@ applyScale();
 let lastH = 0;
 async function autoResize() {
   const hud = document.getElementById("hud");
-  const need = Math.ceil(hud.getBoundingClientRect().height) + 2;
+  const need = Math.ceil(hud.getBoundingClientRect().height) + 4;
   if (Math.abs(need - lastH) < 3) return; // 미세 변동으로 인한 루프 방지
   lastH = need;
   try {
