@@ -5,6 +5,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod observer;
+
 use std::collections::HashMap;
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
@@ -22,6 +24,15 @@ struct UserSettings {
     /// service_key → 표시 여부. 목록에 없으면 기본 true (새 서비스는 자동 표시).
     #[serde(default)]
     enabled_services: HashMap<String, bool>,
+    /// 마지막 창 위치 (물리 픽셀). 재시작 시 복원 — 사용자가 둔 자리가 곧 기본값.
+    #[serde(default)]
+    window_pos: Option<(i32, i32)>,
+    /// 마지막 창 폭 (물리 픽셀). 높이는 내용에 맞춰 자동이므로 폭만 저장한다.
+    #[serde(default)]
+    window_width: Option<u32>,
+    /// 위치 잠금 — 켜면 드래그 이동이 무시된다 (실수 방지).
+    #[serde(default)]
+    pos_locked: bool,
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
@@ -58,6 +69,10 @@ const HEARTBEAT_SECS: u64 = 30;
 /// HUD 창 라벨 — tauri.conf.json과 일치.
 const HUD: &str = "hud";
 
+/// 위치 복원이 끝났는가. 복원 전의 Moved 이벤트(창 생성 시 OS 기본 배치)를 저장하면
+/// 저장된 위치가 계단식 기본값으로 덮여 재시작마다 창이 흘러내린다 (실측).
+static POS_RESTORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 struct HudState {
     click_through: Mutex<bool>,
     settings: Mutex<UserSettings>,
@@ -82,13 +97,37 @@ fn set_service_enabled(
     Ok(())
 }
 
-/// 수동 새로고침 — 수집 루프를 즉시 깨운다.
-/// 로컬 파일을 다시 읽는 것이므로, 서버 상태 자체는 트래픽이 흘러야 갱신된다.
-#[tauri::command]
-fn refresh_now(state: tauri::State<'_, HudState>) -> Result<(), String> {
-    if let Some(tx) = state.refresh_tx.lock().map_err(|e| e.to_string())?.as_ref() {
-        let _ = tx.send(());
+/// 새로고침 트리거 — 수집 루프를 깨우고, Claude 관측 세션도 1회 돌린다.
+/// (관측 세션이 statusline tap을 강제 갱신 → 서버 기준 최신 사용률 확보)
+/// ↻ 버튼과 control 파일의 `refresh` 동사가 공유한다.
+fn trigger_refresh(app: &AppHandle) {
+    let state = app.state::<HudState>();
+    let Ok(guard) = state.refresh_tx.lock() else { return };
+    let Some(tx) = guard.as_ref() else { return };
+    let _ = tx.send(());
+    // 관측 폴은 오래 걸릴 수 있어 별도 스레드로. 이미 도는 중이면 건너뜀.
+    static POLLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !POLLING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let tx2 = tx.clone();
+        std::thread::spawn(move || {
+            observer::poll_once(Duration::from_secs(40));
+            let _ = tx2.send(()); // 폴 결과 반영을 위해 한 번 더 수집
+            POLLING.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
     }
+}
+
+#[tauri::command]
+fn refresh_now(app: AppHandle) -> Result<(), String> {
+    trigger_refresh(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_pos_locked(state: tauri::State<'_, HudState>, locked: bool) -> Result<(), String> {
+    let mut s = state.settings.lock().map_err(|e| e.to_string())?;
+    s.pos_locked = locked;
+    save_settings(&s);
     Ok(())
 }
 
@@ -173,6 +212,7 @@ fn handle_control(app: &AppHandle) {
             }
         }
         "toggle" => toggle_visibility(app),
+        "refresh" => trigger_refresh(app),
         "quit" => app.exit(0),
         other => eprintln!("unknown control command: {other:?}"),
     }
@@ -273,7 +313,8 @@ fn main() {
             set_always_on_top,
             get_settings,
             set_service_enabled,
-            refresh_now
+            refresh_now,
+            set_pos_locked
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -296,6 +337,27 @@ fn main() {
             if let Some(p) = control_file() {
                 let _ = std::fs::remove_file(p);
             }
+            // 저장된 창 위치 복원 — 사용자가 마지막으로 둔 자리가 기본값.
+            {
+                let (pos, width) = app
+                    .state::<HudState>()
+                    .settings
+                    .lock()
+                    .map(|s| (s.window_pos, s.window_width))
+                    .unwrap_or((None, None));
+                if let Some(win) = app.get_webview_window(HUD) {
+                    if let Some((x, y)) = pos {
+                        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+                    }
+                    if let Some(w) = width {
+                        if let Ok(cur) = win.outer_size() {
+                            let _ = win.set_size(tauri::PhysicalSize::new(w, cur.height));
+                        }
+                    }
+                }
+            }
+            // 복원 이후의 Moved만 저장 대상 (위 static 주석 참조).
+            POS_RESTORED.store(true, std::sync::atomic::Ordering::SeqCst);
             // 자기 경로 등록 — /orbit 등 외부 제어가 HUD 꺼진 상태에서도
             // 어디서 실행해야 하는지 알 수 있게 한다 (설치 위치 무관, 매 실행 갱신).
             if let (Ok(exe), Some(ctl)) = (std::env::current_exe(), control_file()) {
@@ -321,7 +383,14 @@ fn main() {
                         .lock()
                         .map(|s| s.enabled_services.clone())
                         .unwrap_or_default();
-                    let payload = serde_json::json!({ "view": view, "enabled": enabled });
+                    let locked = handle
+                        .state::<HudState>()
+                        .settings
+                        .lock()
+                        .map(|s| s.pos_locked)
+                        .unwrap_or(false);
+                    let payload =
+                        serde_json::json!({ "view": view, "enabled": enabled, "locked": locked });
                     // 수신자(HUD)가 없어도 루프는 계속 — fail-open.
                     let _ = handle.emit("usage://update", &payload);
 
@@ -333,6 +402,51 @@ fn main() {
                 }
             });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 창 폭 저장 — 높이는 autoResize가 내용에 맞추므로 저장하지 않는다.
+            if let tauri::WindowEvent::Resized(size) = event {
+                use std::sync::atomic::{AtomicI64, Ordering};
+                static LAST_W_SAVE_MS: AtomicI64 = AtomicI64::new(0);
+                if !POS_RESTORED.load(Ordering::SeqCst) {
+                    return;
+                }
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                if now_ms - LAST_W_SAVE_MS.load(Ordering::Relaxed) < 500 {
+                    return;
+                }
+                LAST_W_SAVE_MS.store(now_ms, Ordering::Relaxed);
+                let mut s = load_settings();
+                if s.window_width != Some(size.width) {
+                    s.window_width = Some(size.width);
+                    save_settings(&s);
+                }
+                let _ = window;
+            }
+            // 창 이동 시 위치 저장 (드래그 중 연사되므로 500ms 스로틀).
+            if let tauri::WindowEvent::Moved(pos) = event {
+                use std::sync::atomic::{AtomicI64, Ordering};
+                if !POS_RESTORED.load(Ordering::SeqCst) {
+                    return; // 복원 전 초기 배치 이벤트 — 저장하면 안 된다
+                }
+                static LAST_SAVE_MS: AtomicI64 = AtomicI64::new(0);
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                if now_ms - LAST_SAVE_MS.load(Ordering::Relaxed) < 500 {
+                    return;
+                }
+                LAST_SAVE_MS.store(now_ms, Ordering::Relaxed);
+                // 파일 기준 read-modify-write — 설정 파일이 단일 진실이라
+                // (set_service_enabled도 즉시 저장) 관리 상태를 거칠 필요가 없다.
+                let mut s = load_settings();
+                s.window_pos = Some((pos.x, pos.y));
+                save_settings(&s);
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running Token_Orbit");

@@ -1,5 +1,5 @@
 ---
-description: Token Orbit HUD 제어 — /orbit [toggle|show|hide|quit|start]
+description: Token Orbit HUD 제어 — /orbit [toggle|show|hide|quit|start|refresh]
 allowed-tools: Bash(bash *), Bash(sh *)
 ---
 

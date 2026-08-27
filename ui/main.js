@@ -15,6 +15,9 @@ const STALE_SECS = 30 * 60;
 let last = null; // 마지막 페이로드 — 토글 즉시 반영과 설정 메뉴 렌더에 사용
 event.listen("usage://update", (e) => {
   last = e.payload;
+  posLocked = !!last.locked;
+  const ls = document.getElementById("lock-state");
+  if (ls) ls.textContent = posLocked ? "켜짐" : "꺼짐";
   render(last);
   renderServiceToggles(last);
 });
@@ -22,9 +25,11 @@ event.listen("usage://update", (e) => {
 // 어디를 잡아도 창 이동. data-tauri-drag-region은 자식 요소 클릭을 못 받아서
 // (카드가 화면을 꽉 채우면 잡을 곳이 없음) startDragging을 직접 호출한다.
 // 단, 메뉴/톱니바퀴 클릭은 드래그로 먹지 않는다.
+let posLocked = false; // 셸이 페이로드로 알려준다
 document.addEventListener("mousedown", (e) => {
   if (e.target.closest("#topbar")) return;
   hideMenu();
+  if (posLocked) return; // 위치 잠금 중에는 드래그 이동 무시
   if (e.button === 0) appWindow.startDragging().catch(() => {});
 });
 
@@ -54,6 +59,10 @@ menuEl.addEventListener("click", async (e) => {
     pinned = !pinned;
     try { await core.invoke("set_always_on_top", { on: pinned }); } catch (_) {}
     document.getElementById("pin-state").textContent = pinned ? "켜짐" : "꺼짐";
+  } else if (act === "lock") {
+    posLocked = !posLocked;
+    document.getElementById("lock-state").textContent = posLocked ? "켜짐" : "꺼짐";
+    try { await core.invoke("set_pos_locked", { locked: posLocked }); } catch (_) {}
   } else if (act === "ghost") {
     // 투과를 켜면 마우스가 창에 닿지 않는다 — 해제는 Ctrl+Shift+O 또는 트레이 메뉴.
     try { await core.invoke("toggle_click_through"); } catch (_) {}

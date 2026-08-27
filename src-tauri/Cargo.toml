@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
+portable-pty = "0.8"
 
 [[bin]]
 name = "token-orbit"

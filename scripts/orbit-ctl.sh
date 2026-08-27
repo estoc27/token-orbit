@@ -2,7 +2,7 @@
 # Token Orbit control (POSIX sh) — used by the /orbit plugin command,
 # works from Git Bash on Windows and natively on macOS/Linux.
 #
-# Usage: orbit-ctl.sh [toggle|show|hide|quit|start]   (default: toggle)
+# Usage: orbit-ctl.sh [toggle|show|hide|quit|start|refresh]   (default: toggle)
 #
 # Talks to the running HUD through ~/.token-orbit/control, a file the app
 # watches (reaction < 1s). No ports. If the HUD is not running, hide/quit
@@ -50,17 +50,17 @@ launch() {
 if running; then
   case "$ACTION" in
     start) echo "[orbit] already running" ;;
-    toggle|show|hide|quit)
+    toggle|show|hide|quit|refresh)
       mkdir -p "$DIR"
       printf '%s' "$ACTION" > "$CTRL"
       echo "[orbit] sent: $ACTION"
       ;;
-    *) echo "[orbit] unknown action: $ACTION (toggle|show|hide|quit|start)"; exit 1 ;;
+    *) echo "[orbit] unknown action: $ACTION (toggle|show|hide|quit|start|refresh)"; exit 1 ;;
   esac
 else
   case "$ACTION" in
-    hide|quit) echo "[orbit] not running - nothing to do" ;;
+    hide|quit|refresh) echo "[orbit] not running - nothing to do" ;;
     toggle|show|start) launch ;;
-    *) echo "[orbit] unknown action: $ACTION (toggle|show|hide|quit|start)"; exit 1 ;;
+    *) echo "[orbit] unknown action: $ACTION (toggle|show|hide|quit|start|refresh)"; exit 1 ;;
   esac
 fi
