@@ -2,7 +2,7 @@
 //! 기존 HTML/CSS 렌더러(ui/main.js)의 egui 이식.
 
 use crate::theme;
-use eframe::egui::{self, Margin, RichText, Rounding, Stroke};
+use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 use orbit_core::aggregate::{AggregatedView, ServiceCard, WindowView};
 
 /// UI에서 발생한 사용자 액션 — main이 처리한다.
@@ -10,6 +10,10 @@ use orbit_core::aggregate::{AggregatedView, ServiceCard, WindowView};
 pub enum Action {
     Refresh,
     ToggleMenu,
+    ToggleAlwaysOnTop,
+    TogglePosLock,
+    ToggleClickThrough,
+    SetOpacity(f32),
     Quit,
 }
 
@@ -21,14 +25,32 @@ pub struct RenderResult {
     pub resize_dx: Option<f32>,
 }
 
+/// 현재 설정 스냅샷 — 메뉴 체크 표시용.
+#[derive(Clone, Copy)]
+pub struct SettingsView {
+    pub always_on_top: bool,
+    pub pos_locked: bool,
+    pub click_through: bool,
+    pub opacity: f32,
+}
+
 /// 한 프레임을 그리고, 클릭된 액션과 콘텐츠 높이를 반환한다.
-pub fn render(ui: &mut egui::Ui, view: Option<&AggregatedView>, menu_open: bool) -> RenderResult {
+pub fn render(
+    ui: &mut egui::Ui,
+    view: Option<&AggregatedView>,
+    menu_open: bool,
+    settings: SettingsView,
+) -> RenderResult {
+    OPACITY.with(|o| o.set(settings.opacity));
     let mut action = None;
 
     // 상단 바 — 우측 정렬 아이콘 (⚙ 메뉴, ↻ 새로고침)
+    let mut gear_rect = egui::Rect::NOTHING;
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if icon_button(ui, "⚙").clicked() {
+            let gear = icon_button(ui, "⚙");
+            gear_rect = gear.rect;
+            if gear.clicked() {
                 action = Some(Action::ToggleMenu);
             }
             if icon_button(ui, "⟳").clicked() {
@@ -37,10 +59,17 @@ pub fn render(ui: &mut egui::Ui, view: Option<&AggregatedView>, menu_open: bool)
         });
     });
 
+    // 메뉴 — ⚙ **오른쪽**에 뜨는 팝업 (Area로 레이아웃 흐름 밖에 배치).
     if menu_open {
-        if let Some(a) = menu_ui(ui) {
-            action = Some(a);
-        }
+        let menu_pos = egui::pos2(gear_rect.right() + 4.0, gear_rect.top());
+        egui::Area::new(ui.id().with("menu"))
+            .fixed_pos(menu_pos)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                if let Some(a) = menu_ui(ui, settings) {
+                    action = Some(a);
+                }
+            });
     }
 
     // 스크롤 없이 세로로 쌓는다 — 창이 내용 높이에 맞춰 자동 조절되므로.
@@ -56,15 +85,18 @@ pub fn render(ui: &mut egui::Ui, view: Option<&AggregatedView>, menu_open: bool)
 
     let content_height = ui.next_widget_position().y - ui.min_rect().top();
 
-    // 우하단 그립 — 유일한 리사이즈 지점. 창 우하단 모서리에 겹쳐 그린다.
-    let full = ui.min_rect();
-    let grip_size = egui::vec2(16.0, 16.0);
-    let grip_rect = egui::Rect::from_min_size(full.max - grip_size, grip_size);
+    // 우하단 그립 — 유일한 리사이즈 지점.
+    // 콘텐츠 하단(마지막 카드 아래) 우측 안쪽에 둔다. 창 클라이언트 영역의 max를
+    // 그대로 쓰면 카드 외곽선 밖으로 나가므로(실측), 안쪽으로 4px 당긴다.
+    let clip = ui.clip_rect();
+    let grip_size = egui::vec2(14.0, 14.0);
+    let grip_max = egui::pos2(clip.right() - 4.0, content_height + ui.min_rect().top() - 2.0);
+    let grip_rect = egui::Rect::from_min_size(grip_max - grip_size, grip_size);
     let grip = ui.interact(grip_rect, ui.id().with("grip"), egui::Sense::drag());
     let color = if grip.hovered() || grip.dragged() { theme::ICON_HOVER } else { theme::ICON };
     // ◢ 대각선 삼각형
     let p = ui.painter();
-    let (r, b) = (grip_rect.right() - 3.0, grip_rect.bottom() - 3.0);
+    let (r, b) = (grip_rect.right(), grip_rect.bottom());
     for i in 0..3 {
         let o = i as f32 * 3.5;
         p.line_segment([egui::pos2(r - o, b), egui::pos2(r, b - o)], Stroke::new(1.5, color));
@@ -95,24 +127,55 @@ fn icon_button(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
     resp
 }
 
-fn menu_ui(ui: &mut egui::Ui) -> Option<Action> {
+fn menu_ui(ui: &mut egui::Ui, s: SettingsView) -> Option<Action> {
     let mut action = None;
     egui::Frame::none()
-        .fill(theme::CARD_BG)
+        .fill(Color32::from_rgb(28, 28, 34))
         .stroke(Stroke::new(1.0, theme::CARD_BORDER))
         .rounding(Rounding::same(8.0))
-        .inner_margin(Margin::same(4.0))
+        .inner_margin(Margin::same(5.0))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            if ui.add(egui::Button::new(RichText::new("↻ 지금 새로고침").size(11.0).color(theme::TEXT)).frame(false)).clicked() {
+            ui.set_min_width(160.0);
+            let mark = |on: bool| if on { "☑" } else { "☐" };
+
+            if menu_item(ui, &format!("{} 항상 위", mark(s.always_on_top))) {
+                action = Some(Action::ToggleAlwaysOnTop);
+            }
+            if menu_item(ui, &format!("{} 위치 잠금", mark(s.pos_locked))) {
+                action = Some(Action::TogglePosLock);
+            }
+            if menu_item(ui, &format!("{} 클릭 투과", mark(s.click_through))) {
+                action = Some(Action::ToggleClickThrough);
+            }
+
+            ui.add_space(4.0);
+            ui.label(RichText::new("투명도").size(9.0).color(theme::TEXT_FAINT));
+            let mut op = s.opacity;
+            if ui
+                .add(egui::Slider::new(&mut op, 0.3..=1.0).show_value(false))
+                .changed()
+            {
+                action = Some(Action::SetOpacity(op));
+            }
+
+            ui.add_space(4.0);
+            if menu_item(ui, "↻ 지금 새로고침") {
                 action = Some(Action::Refresh);
             }
-            if ui.add(egui::Button::new(RichText::new("✕ 종료").size(11.0).color(theme::TEXT)).frame(false)).clicked() {
+            if menu_item(ui, "✕ 종료") {
                 action = Some(Action::Quit);
             }
         });
-    ui.add_space(4.0);
     action
+}
+
+fn menu_item(ui: &mut egui::Ui, text: &str) -> bool {
+    ui.add(
+        egui::Button::new(RichText::new(text).size(11.0).color(theme::TEXT))
+            .frame(false)
+            .min_size(egui::vec2(ui.available_width(), 20.0)),
+    )
+    .clicked()
 }
 
 fn placeholder(ui: &mut egui::Ui, text: &str) {
@@ -123,10 +186,17 @@ fn placeholder(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+// 현재 프레임의 카드 불투명도 — render 진입 시 설정한다 (thread-local).
+thread_local! {
+    static OPACITY: std::cell::Cell<f32> = const { std::cell::Cell::new(0.86) };
+}
+
 /// 카드 배경 프레임 (둥근 모서리 + 반투명 배경 + 얇은 테두리).
 fn card_frame<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let a = (OPACITY.with(|o| o.get()) * 255.0) as u8;
+    let bg = Color32::from_rgba_unmultiplied(20, 20, 24, a);
     egui::Frame::none()
-        .fill(theme::CARD_BG)
+        .fill(bg)
         .stroke(Stroke::new(1.0, theme::CARD_BORDER))
         .rounding(Rounding::same(10.0))
         .inner_margin(Margin::symmetric(10.0, 8.0))

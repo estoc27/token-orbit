@@ -6,8 +6,11 @@
 // 콘솔 창을 항상 숨긴다 (디버그 빌드 포함) — 오버레이 앱이라 콘솔이 작업표시줄에 뜨면 안 된다.
 #![windows_subsystem = "windows"]
 
+mod settings;
 mod theme;
 mod ui;
+
+use settings::Settings;
 
 use eframe::egui;
 use orbit_core::aggregate::AggregatedView;
@@ -66,6 +69,9 @@ struct HudApp {
     menu_open: bool,
     /// 마지막으로 설정한 창 높이 — 자동 조절 시 떨림 방지.
     last_height: f32,
+    settings: Settings,
+    /// 시작 시 저장된 창 상태(위치·모드)를 아직 적용하지 않았으면 true.
+    needs_restore: bool,
     /// 관측 세션이 이미 도는 중이면 중복 실행 방지.
     observing: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -73,11 +79,17 @@ struct HudApp {
 impl HudApp {
     fn new(cc: &eframe::CreationContext<'_>, rx: mpsc::Receiver<Msg>) -> Self {
         theme::install(&cc.egui_ctx);
+        let settings = Settings::load();
+        if let Some(z) = settings.zoom {
+            cc.egui_ctx.set_zoom_factor(z);
+        }
         Self {
             rx,
             view: None,
             menu_open: false,
             last_height: 0.0,
+            settings,
+            needs_restore: true,
             observing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -103,6 +115,19 @@ impl eframe::App for HudApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 시작 시 저장된 창 상태 복원 (한 번만).
+        if self.needs_restore {
+            self.needs_restore = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if self.settings.always_on_top {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            }));
+            if let Some((x, y)) = self.settings.window_pos {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x as f32, y as f32)));
+            }
+        }
+
         // 새 뷰 수신 (논블로킹).
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
@@ -110,12 +135,19 @@ impl eframe::App for HudApp {
             }
         }
 
+        let sview = ui::SettingsView {
+            always_on_top: self.settings.always_on_top,
+            pos_locked: self.settings.pos_locked,
+            click_through: self.settings.click_through,
+            opacity: self.settings.opacity,
+        };
+
         let mut action = None;
         let mut resize_dx = None;
         let content_height = egui::CentralPanel::default()
             .frame(egui::Frame::none()) // 패널 자체 배경 없음 — 카드만 불투명
             .show(ctx, |ui_ctx| {
-                let r = ui::render(ui_ctx, self.view.as_ref(), self.menu_open);
+                let r = ui::render(ui_ctx, self.view.as_ref(), self.menu_open, sview);
                 action = r.action;
                 resize_dx = r.resize_dx;
                 r.content_height
@@ -132,18 +164,30 @@ impl eframe::App for HudApp {
             let new_zoom = (new_w / 320.0).clamp(0.6, 2.5);
             if (new_zoom - base_zoom).abs() > 0.001 {
                 ctx.set_zoom_factor(new_zoom);
+                self.settings.zoom = Some(new_zoom);
+                self.settings.save();
                 self.last_height = 0.0; // 높이 재측정 강제
             }
         }
 
-        // 빈 여백을 드래그하면 창 이동 (무테두리 창의 이동 수단).
-        // 아이콘/버튼이 클릭을 이미 소비했으면 여기 안 옴.
-        if ctx.input(|i| i.pointer.primary_down())
-            && ctx.input(|i| i.pointer.press_origin().is_some())
+        // 빈 여백을 드래그하면 창 이동 — 위치 잠금·클릭 투과 중엔 안 함.
+        if !self.settings.pos_locked
+            && !self.settings.click_through
+            && ctx.input(|i| i.pointer.primary_down())
+            && !ctx.is_using_pointer()
+            && ctx.input(|i| i.pointer.is_decidedly_dragging())
         {
-            // 위젯이 안 물린 빈 영역에서 눌렸을 때만 드래그.
-            if !ctx.is_using_pointer() && ctx.input(|i| i.pointer.is_decidedly_dragging()) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+
+        // 창 이동이 끝났을 때 위치 저장.
+        if !self.settings.pos_locked {
+            if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+                let pos = (rect.min.x as i32, rect.min.y as i32);
+                if self.settings.window_pos != Some(pos) && rect.min.x.is_finite() {
+                    self.settings.window_pos = Some(pos);
+                    self.settings.save();
+                }
             }
         }
 
@@ -153,6 +197,33 @@ impl eframe::App for HudApp {
                 self.trigger_refresh();
             }
             Some(ui::Action::ToggleMenu) => self.menu_open = !self.menu_open,
+            Some(ui::Action::ToggleAlwaysOnTop) => {
+                self.settings.always_on_top = !self.settings.always_on_top;
+                ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                    if self.settings.always_on_top {
+                        egui::WindowLevel::AlwaysOnTop
+                    } else {
+                        egui::WindowLevel::Normal
+                    },
+                ));
+                self.settings.save();
+            }
+            Some(ui::Action::TogglePosLock) => {
+                self.settings.pos_locked = !self.settings.pos_locked;
+                self.settings.save();
+            }
+            Some(ui::Action::ToggleClickThrough) => {
+                self.settings.click_through = !self.settings.click_through;
+                // egui: 이 창을 마우스 입력에 투과시킴.
+                ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(
+                    self.settings.click_through,
+                ));
+                self.settings.save();
+            }
+            Some(ui::Action::SetOpacity(o)) => {
+                self.settings.opacity = o;
+                self.settings.save();
+            }
             Some(ui::Action::Quit) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
