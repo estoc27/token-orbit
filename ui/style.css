@@ -14,7 +14,8 @@ body {
 }
 
 #hud {
-  padding: 8px;
+  /* 패딩 최소화 — 보이는 카드 외곽 ≒ 실제 창 테두리 (리사이즈 히트 영역 일치) */
+  padding: 2px;
   display: flex;
   flex-direction: column;
   gap: 6px;

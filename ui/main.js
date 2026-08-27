@@ -129,11 +129,27 @@ function renderServiceToggles(payload) {
     .join("");
 }
 
-// 내용 높이에 맞춰 창 크기 조절 — 카드가 잘리지 않게.
+// ---- 폭 기반 스케일링 ----
+// 창 폭을 기준폭(320) 대비 비율로 환산해 콘텐츠 전체를 zoom으로 확대/축소한다.
+// 사용자가 창을 넓히면 글자·게이지가 함께 커진다.
+const BASE_W = 320;
+let scale = 1;
+function applyScale() {
+  scale = Math.min(2.5, Math.max(0.6, window.innerWidth / BASE_W));
+  document.body.style.zoom = scale;
+}
+window.addEventListener("resize", () => {
+  applyScale();
+  autoResize();
+});
+applyScale();
+
+// 내용 높이에 맞춰 창 높이 자동 조절 — 카드가 잘리지 않게.
+// zoom 적용 시 offsetHeight는 무배율 레이아웃 값이므로 scale을 곱해 실제 높이를 얻는다.
 let lastH = 0;
 async function autoResize() {
   const hud = document.getElementById("hud");
-  const need = Math.ceil(hud.offsetHeight) + 2;
+  const need = Math.ceil(hud.offsetHeight * scale) + 2;
   if (Math.abs(need - lastH) < 3) return; // 미세 변동으로 인한 루프 방지
   lastH = need;
   try {
