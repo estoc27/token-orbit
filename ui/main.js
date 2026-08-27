@@ -27,7 +27,7 @@ event.listen("usage://update", (e) => {
 // 단, 메뉴/톱니바퀴 클릭은 드래그로 먹지 않는다.
 let posLocked = false; // 셸이 페이로드로 알려준다
 document.addEventListener("mousedown", (e) => {
-  if (e.target.closest("#topbar")) return;
+  if (e.target.closest("#topbar") || e.target.closest("#grip")) return;
   hideMenu();
   if (posLocked) return; // 위치 잠금 중에는 드래그 이동 무시
   if (e.button === 0) appWindow.startDragging().catch(() => {});
@@ -148,6 +148,37 @@ window.addEventListener("resize", () => {
   autoResize();
 });
 applyScale();
+
+// ---- 모서리 그립 리사이즈 ----
+// OS 가장자리 리사이즈는 껐다(resizable:false) — 비율이 폭으로 정해지므로
+// 대각선 그립 하나로 폭을 끌고, 높이는 스케일에 맞춰 자동으로 따라온다.
+{
+  const grip = document.getElementById("grip");
+  let rs = null;
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    grip.setPointerCapture(e.pointerId);
+    rs = { x: e.screenX, w: window.innerWidth, h: window.innerHeight };
+  });
+  grip.addEventListener("pointermove", (e) => {
+    if (!rs) return;
+    const newW = Math.min(800, Math.max(192, rs.w + (e.screenX - rs.x)));
+    // 드래그 중에는 비율 유지로 높이를 근사하고, 확정 높이는 autoResize가 다듬는다.
+    const newH = Math.max(60, Math.round((rs.h * newW) / rs.w));
+    appWindow.setSize(new tauriWin.LogicalSize(newW, newH)).catch(() => {});
+  });
+  const end = (e) => {
+    if (!rs) return;
+    rs = null;
+    try { grip.releasePointerCapture(e.pointerId); } catch (_) {}
+    applyScale();
+    lastH = 0; // 강제 재측정
+    autoResize();
+  };
+  grip.addEventListener("pointerup", end);
+  grip.addEventListener("pointercancel", end);
+}
 
 // 내용 높이에 맞춰 창 높이 자동 조절 — 카드가 잘리지 않게.
 // getBoundingClientRect는 transform이 반영된 실제 렌더 크기를 준다.

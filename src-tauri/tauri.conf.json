@@ -14,13 +14,13 @@
         "title": "Token Orbit",
         "width": 320,
         "height": 240,
-        "minWidth": 240,
-        "minHeight": 120,
+        "minWidth": 192,
+        "minHeight": 60,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "resizable": true,
+        "resizable": false,
         "shadow": false
       }
     ],
