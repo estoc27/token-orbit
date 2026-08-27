@@ -22,5 +22,12 @@ if errorlevel 1 (
   set ANTHROPIC_BASE_URL=http://127.0.0.1:8377
 )
 
-call claude.cmd %*
+REM Prefer the native binary (present on npm-based installs too); fall back to
+REM whatever `claude` resolves to on PATH. `claude.cmd` alone is unreliable:
+REM on this machine only the .exe and PowerShell/sh shims exist on PATH.
+if exist "%USERPROFILE%\.local\bin\claude.exe" (
+  "%USERPROFILE%\.local\bin\claude.exe" %*
+) else (
+  call claude %*
+)
 endlocal
