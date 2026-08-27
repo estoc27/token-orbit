@@ -13,8 +13,14 @@ pub const BAR_OK: Color32 = Color32::from_rgb(76, 175, 130); // #4caf82
 pub const BAR_WARN: Color32 = Color32::from_rgb(230, 180, 34); // #e6b422
 pub const BAR_CRIT: Color32 = Color32::from_rgb(224, 93, 93); // #e05d5d
 
-pub const BADGE_BG: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 31);
+// 플랜 배지 — 흰 반투명 위 흰 글씨는 안 읽혔다. 채도 있는 배경 + 밝은 글씨로 대비 확보.
+pub const BADGE_BG: Color32 = Color32::from_rgb(58, 60, 74);
+pub const BADGE_TEXT: Color32 = Color32::from_rgb(198, 210, 255);
 pub const ACCENT: Color32 = Color32::from_rgb(216, 180, 254); // 보라 (Fable note)
+
+// 상단 바 아이콘
+pub const ICON: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 130);
+pub const ICON_HOVER: Color32 = Color32::from_rgb(255, 255, 255);
 
 pub const WARN_PCT: f64 = 80.0;
 pub const CRIT_PCT: f64 = 90.0;

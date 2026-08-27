@@ -3,7 +3,8 @@
 //! Tauri/WebView2(~330MB) 대체. 같은 `orbit-core`를 소비하며, WebView 없이
 //! GPU로 직접 그린다. 목표: 투명·최상단·무테두리 오버레이, 수집은 백그라운드 스레드.
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// 콘솔 창을 항상 숨긴다 (디버그 빌드 포함) — 오버레이 앱이라 콘솔이 작업표시줄에 뜨면 안 된다.
+#![windows_subsystem = "windows"]
 
 mod theme;
 mod ui;
@@ -62,12 +63,36 @@ fn main() -> eframe::Result<()> {
 struct HudApp {
     rx: mpsc::Receiver<Msg>,
     view: Option<AggregatedView>,
+    menu_open: bool,
+    /// 마지막으로 설정한 창 높이 — 자동 조절 시 떨림 방지.
+    last_height: f32,
+    /// 관측 세션이 이미 도는 중이면 중복 실행 방지.
+    observing: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl HudApp {
     fn new(cc: &eframe::CreationContext<'_>, rx: mpsc::Receiver<Msg>) -> Self {
         theme::install(&cc.egui_ctx);
-        Self { rx, view: None }
+        Self {
+            rx,
+            view: None,
+            menu_open: false,
+            last_height: 0.0,
+            observing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// 수동 새로고침 — Claude 관측 세션을 1회 돌려 statusline tap을 강제 갱신.
+    fn trigger_refresh(&self) {
+        use std::sync::atomic::Ordering;
+        if self.observing.swap(true, Ordering::SeqCst) {
+            return; // 이미 도는 중
+        }
+        let flag = self.observing.clone();
+        std::thread::spawn(move || {
+            orbit_core::observer::poll_once(std::time::Duration::from_secs(40));
+            flag.store(false, Ordering::SeqCst);
+        });
     }
 }
 
@@ -85,11 +110,63 @@ impl eframe::App for HudApp {
             }
         }
 
-        egui::CentralPanel::default()
+        let mut action = None;
+        let mut resize_dx = None;
+        let content_height = egui::CentralPanel::default()
             .frame(egui::Frame::none()) // 패널 자체 배경 없음 — 카드만 불투명
             .show(ctx, |ui_ctx| {
-                ui::render(ui_ctx, self.view.as_ref());
-            });
+                let r = ui::render(ui_ctx, self.view.as_ref(), self.menu_open);
+                action = r.action;
+                resize_dx = r.resize_dx;
+                r.content_height
+            })
+            .inner;
+
+        // 그립 드래그 → 폭 조절 + 콘텐츠 스케일. egui는 zoom_factor로 전체 배율을
+        // 한 번에 바꾸므로 CSS zoom 진동 같은 문제가 없다.
+        if let Some(dx) = resize_dx {
+            let cur_w = ctx.input(|i| i.screen_rect().width());
+            let base_zoom = ctx.zoom_factor();
+            // 물리 폭 기준으로 배율 계산 (base 320px 논리폭 = zoom 1.0).
+            let new_w = (cur_w + dx / base_zoom).clamp(192.0, 800.0);
+            let new_zoom = (new_w / 320.0).clamp(0.6, 2.5);
+            if (new_zoom - base_zoom).abs() > 0.001 {
+                ctx.set_zoom_factor(new_zoom);
+                self.last_height = 0.0; // 높이 재측정 강제
+            }
+        }
+
+        // 빈 여백을 드래그하면 창 이동 (무테두리 창의 이동 수단).
+        // 아이콘/버튼이 클릭을 이미 소비했으면 여기 안 옴.
+        if ctx.input(|i| i.pointer.primary_down())
+            && ctx.input(|i| i.pointer.press_origin().is_some())
+        {
+            // 위젯이 안 물린 빈 영역에서 눌렸을 때만 드래그.
+            if !ctx.is_using_pointer() && ctx.input(|i| i.pointer.is_decidedly_dragging()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
+
+        match action {
+            Some(ui::Action::Refresh) => {
+                self.menu_open = false;
+                self.trigger_refresh();
+            }
+            Some(ui::Action::ToggleMenu) => self.menu_open = !self.menu_open,
+            Some(ui::Action::Quit) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            None => {}
+        }
+
+        // 내용 높이에 맞춰 창 높이 자동 조절 — 카드가 잘리지 않게.
+        // 히스테리시스 4px로 미세 변동 시 창이 떨리지 않게 한다.
+        let want_h = (content_height + 6.0).clamp(60.0, 1200.0);
+        if (want_h - self.last_height).abs() > 4.0 {
+            self.last_height = want_h;
+            let w = ctx.input(|i| i.screen_rect().width());
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, want_h)));
+        }
 
         // 수집 스레드가 UI를 깨우도록 주기적 리페인트 (나이 표시 갱신 등).
         ctx.request_repaint_after(Duration::from_secs(1));

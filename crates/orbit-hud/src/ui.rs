@@ -5,20 +5,114 @@ use crate::theme;
 use eframe::egui::{self, Margin, RichText, Rounding, Stroke};
 use orbit_core::aggregate::{AggregatedView, ServiceCard, WindowView};
 
-pub fn render(ui: &mut egui::Ui, view: Option<&AggregatedView>) {
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            match view {
-                None => placeholder(ui, "수집 대기 중…"),
-                Some(v) if v.cards.is_empty() => placeholder(ui, "감지된 소스 없음"),
-                Some(v) => {
-                    for card in &v.cards {
-                        card_ui(ui, card);
-                    }
-                }
+/// UI에서 발생한 사용자 액션 — main이 처리한다.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Action {
+    Refresh,
+    ToggleMenu,
+    Quit,
+}
+
+/// render 결과 — 액션과, 자동 높이 조절용 실제 콘텐츠 높이.
+pub struct RenderResult {
+    pub action: Option<Action>,
+    pub content_height: f32,
+    /// 우하단 그립을 드래그한 누적 델타(x). 폭 조절에 쓴다.
+    pub resize_dx: Option<f32>,
+}
+
+/// 한 프레임을 그리고, 클릭된 액션과 콘텐츠 높이를 반환한다.
+pub fn render(ui: &mut egui::Ui, view: Option<&AggregatedView>, menu_open: bool) -> RenderResult {
+    let mut action = None;
+
+    // 상단 바 — 우측 정렬 아이콘 (⚙ 메뉴, ↻ 새로고침)
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if icon_button(ui, "⚙").clicked() {
+                action = Some(Action::ToggleMenu);
+            }
+            if icon_button(ui, "⟳").clicked() {
+                action = Some(Action::Refresh);
             }
         });
+    });
+
+    if menu_open {
+        if let Some(a) = menu_ui(ui) {
+            action = Some(a);
+        }
+    }
+
+    // 스크롤 없이 세로로 쌓는다 — 창이 내용 높이에 맞춰 자동 조절되므로.
+    match view {
+        None => placeholder(ui, "수집 대기 중…"),
+        Some(v) if v.cards.is_empty() => placeholder(ui, "감지된 소스 없음"),
+        Some(v) => {
+            for card in &v.cards {
+                card_ui(ui, card);
+            }
+        }
+    }
+
+    let content_height = ui.next_widget_position().y - ui.min_rect().top();
+
+    // 우하단 그립 — 유일한 리사이즈 지점. 창 우하단 모서리에 겹쳐 그린다.
+    let full = ui.min_rect();
+    let grip_size = egui::vec2(16.0, 16.0);
+    let grip_rect = egui::Rect::from_min_size(full.max - grip_size, grip_size);
+    let grip = ui.interact(grip_rect, ui.id().with("grip"), egui::Sense::drag());
+    let color = if grip.hovered() || grip.dragged() { theme::ICON_HOVER } else { theme::ICON };
+    // ◢ 대각선 삼각형
+    let p = ui.painter();
+    let (r, b) = (grip_rect.right() - 3.0, grip_rect.bottom() - 3.0);
+    for i in 0..3 {
+        let o = i as f32 * 3.5;
+        p.line_segment([egui::pos2(r - o, b), egui::pos2(r, b - o)], Stroke::new(1.5, color));
+    }
+    if grip.hovered() || grip.dragged() {
+        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeNwSe);
+    }
+    let resize_dx = grip.dragged().then(|| grip.drag_delta().x);
+
+    RenderResult { action, content_height, resize_dx }
+}
+
+fn icon_button(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
+    let resp = ui.add(
+        egui::Button::new(RichText::new(glyph).size(14.0).color(theme::ICON))
+            .frame(false)
+            .min_size(egui::vec2(20.0, 16.0)),
+    );
+    if resp.hovered() {
+        ui.painter().text(
+            resp.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            egui::FontId::proportional(14.0),
+            theme::ICON_HOVER,
+        );
+    }
+    resp
+}
+
+fn menu_ui(ui: &mut egui::Ui) -> Option<Action> {
+    let mut action = None;
+    egui::Frame::none()
+        .fill(theme::CARD_BG)
+        .stroke(Stroke::new(1.0, theme::CARD_BORDER))
+        .rounding(Rounding::same(8.0))
+        .inner_margin(Margin::same(4.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if ui.add(egui::Button::new(RichText::new("↻ 지금 새로고침").size(11.0).color(theme::TEXT)).frame(false)).clicked() {
+                action = Some(Action::Refresh);
+            }
+            if ui.add(egui::Button::new(RichText::new("✕ 종료").size(11.0).color(theme::TEXT)).frame(false)).clicked() {
+                action = Some(Action::Quit);
+            }
+        });
+    ui.add_space(4.0);
+    action
 }
 
 fn placeholder(ui: &mut egui::Ui, text: &str) {
@@ -129,7 +223,7 @@ fn badge(ui: &mut egui::Ui, text: &str) {
         .rounding(Rounding::same(8.0))
         .inner_margin(Margin::symmetric(6.0, 1.0))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).color(theme::TEXT).size(10.0));
+            ui.label(RichText::new(text).color(theme::BADGE_TEXT).size(10.0).strong());
         });
 }
 
