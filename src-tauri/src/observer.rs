@@ -80,6 +80,10 @@ pub fn poll_once(timeout: Duration) -> bool {
 
     let mut cmd = CommandBuilder::new(&exe);
     cmd.cwd(&cwd);
+    // 참고(실측, 2026-08-27): 핸드셰이크의 rate_limits는 ANTHROPIC_BASE_URL 경유
+    // 트래픽이 아니다 — 프록시 경유 + --model fable로 띄워도 unified 헤더가 전혀
+    // 채집되지 않았다. 따라서 관측 세션이 갱신하는 것은 statusline의 5h/7d뿐이고,
+    // 모델 전용 창(7d Fable)은 실제 Fable 요청이 프록시를 지날 때만 갱신된다.
     let Ok(mut child) = pair.slave.spawn_command(cmd) else {
         eprintln!("observer: claude 기동 실패");
         return false;
