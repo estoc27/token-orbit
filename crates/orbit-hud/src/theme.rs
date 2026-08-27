@@ -36,21 +36,20 @@ pub fn bar_color(used_percent: f64) -> Color32 {
     }
 }
 
+/// 내장 한글 폰트 — Noto Sans KR(SIL OFL 1.1)에서 이 앱이 쓰는 글자만 뽑은 서브셋.
+/// 재생성: `python tools/make-font-subset.py` (한글 문구를 추가·수정한 뒤에 필요).
+const KOREAN_SUBSET: &[u8] = include_bytes!("../assets/NotoSansKR-subset.ttf");
+
 /// 한글 폰트 등록 — egui 기본 폰트엔 한글 글리프가 없어 □로 깨진다.
-/// Windows 시스템 폰트(맑은 고딕)를 런타임 로드한다 (배포 대상 PC에도 존재).
+///
+/// 시스템 폰트(맑은 고딕 12.8MB)를 런타임에 읽던 방식은 프로세스 메모리를
+/// 36.8MB 먹었고(실측), Windows 폰트 경로에도 묶여 있었다. 147KB 서브셋을
+/// 바이너리에 넣어 둘 다 없앤다 — 어느 OS에서도 글꼴이 동일하다.
 fn install_korean_font(ctx: &egui::Context) {
-    // 여러 후보를 순서대로 시도 (OS/로캘 차이 대비).
-    let candidates = [
-        r"C:\Windows\Fonts\malgun.ttf",   // Windows 맑은 고딕
-        r"C:\Windows\Fonts\gulim.ttc",    // 구형 굴림
-    ];
-    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
-        return; // 한글 폰트 없음 — 기본 폰트로 (라틴은 정상)
-    };
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "korean".to_owned(),
-        egui::FontData::from_owned(bytes).into(),
+        egui::FontData::from_static(KOREAN_SUBSET).into(),
     );
     // 두 계열(비례/고정폭) 모두 한글을 폴백으로 추가 — 라틴은 기존 폰트가 우선.
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {

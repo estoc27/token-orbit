@@ -151,6 +151,10 @@ The full design document — including the measurement pitfalls this project ran
 
 [MIT](LICENSE)
 
+The HUD bundles a subset of **Noto Sans KR** for Korean text, used under the
+[SIL Open Font License 1.1](crates/orbit-hud/assets/OFL.txt) — see
+[the font's README](crates/orbit-hud/assets/README.md) for attribution.
+
 ---
 
 ## 한국어 안내
