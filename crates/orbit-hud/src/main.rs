@@ -22,24 +22,118 @@ enum Msg {
     View(AggregatedView),
 }
 
-fn main() -> eframe::Result<()> {
-    let (tx, rx) = mpsc::channel::<Msg>();
-
-    // 수집 루프 — orbit-core를 돌려 뷰를 UI로 보낸다. 파일 감시 + heartbeat.
-    std::thread::spawn(move || {
-        let mut collectors = orbit_core::default_collectors();
-        let (tick_tx, tick_rx) = mpsc::channel::<()>();
-        let _watcher = orbit_core::watch::watch_sources_into(&collectors, tick_tx);
-        loop {
-            let view = orbit_core::aggregate::collect_all(&mut collectors);
-            if tx.send(Msg::View(view)).is_err() {
-                break; // UI 종료됨
-            }
-            let _ = tick_rx.recv_timeout(Duration::from_secs(30));
-            std::thread::sleep(Duration::from_millis(300)); // 디바운스
-            while tick_rx.try_recv().is_ok() {}
-        }
+/// 관측 세션 1회 트리거 — 어느 스레드에서든 부를 수 있게 전역 가드.
+fn trigger_observer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static POLLING: AtomicBool = AtomicBool::new(false);
+    if POLLING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        orbit_core::observer::poll_once(Duration::from_secs(40));
+        POLLING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
+}
+
+/// 클릭 투과 상태 — UI 체크 표시와 스레드들이 공유한다.
+static CLICK_THROUGH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn toggle_click_through_global() {
+    use std::sync::atomic::Ordering;
+    let on = !CLICK_THROUGH.load(Ordering::SeqCst);
+    CLICK_THROUGH.store(on, Ordering::SeqCst);
+    #[cfg(windows)]
+    win32::set_click_through(on);
+}
+
+/// Win32 직접 호출 — eframe의 ViewportCommand::Visible이 투명·무테두리 창에서
+/// 동작하지 않아(실측: 명령 전송 후에도 IsWindowVisible=TRUE) OS API를 직접 쓴다.
+#[cfg(windows)]
+mod win32 {
+    pub type Hwnd = isize;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn ShowWindow(hwnd: Hwnd, cmd: i32) -> i32;
+        fn GetWindowLongW(hwnd: Hwnd, idx: i32) -> i32;
+        fn SetWindowLongW(hwnd: Hwnd, idx: i32, val: i32) -> i32;
+        fn SetForegroundWindow(hwnd: Hwnd) -> i32;
+        fn IsWindowVisible(hwnd: Hwnd) -> i32;
+    }
+
+    use std::sync::atomic::{AtomicIsize, Ordering};
+    static HWND: AtomicIsize = AtomicIsize::new(0);
+
+    /// 시작 시 eframe이 만든 **진짜** 창 핸들을 등록한다.
+    /// 제목으로 FindWindow 하면 안 된다: eframe은 창 제목을 비워두고,
+    /// Process.MainWindowHandle은 winit의 숨은 이벤트 타깃 창을 가리킨다 (실측).
+    pub fn register(h: Hwnd) {
+        HWND.store(h, Ordering::Relaxed);
+    }
+
+    fn hwnd() -> Hwnd {
+        HWND.load(Ordering::Relaxed)
+    }
+
+    pub fn is_visible() -> bool {
+        let h = hwnd();
+        h != 0 && unsafe { IsWindowVisible(h) } != 0
+    }
+
+    pub fn set_visible(on: bool) {
+        let h = hwnd();
+        if h == 0 {
+            return;
+        }
+        unsafe {
+            // SW_SHOWNOACTIVATE(4) — 포커스를 뺏지 않고 표시. SW_HIDE(0).
+            ShowWindow(h, if on { 4 } else { 0 });
+            if on {
+                SetForegroundWindow(h);
+            }
+        }
+    }
+
+    /// 클릭 투과: WS_EX_TRANSPARENT(0x20) + WS_EX_LAYERED(0x80000) 토글.
+    pub fn set_click_through(on: bool) {
+        let h = hwnd();
+        if h == 0 {
+            return;
+        }
+        const GWL_EXSTYLE: i32 = -20;
+        const FLAGS: i32 = 0x20 | 0x8_0000;
+        unsafe {
+            let ex = GetWindowLongW(h, GWL_EXSTYLE);
+            SetWindowLongW(h, GWL_EXSTYLE, if on { ex | FLAGS } else { ex & !0x20 });
+        }
+    }
+}
+
+/// 외부 제어 파일 — Tauri 버전과 동일한 계약 (/orbit 플러그인이 쓴다).
+fn control_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|h| std::path::PathBuf::from(h).join(".token-orbit").join("control"))
+}
+
+/// 자기 exe 경로 등록 — /orbit이 HUD를 콜드런치할 때 찾는 파일.
+fn register_app_path() {
+    let (Some(dir), Ok(exe)) = (
+        std::env::var_os("USERPROFILE").map(|h| std::path::PathBuf::from(h).join(".token-orbit")),
+        std::env::current_exe(),
+    ) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join("app-path"), exe.to_string_lossy().as_bytes());
+}
+
+fn main() -> eframe::Result<()> {
+    register_app_path();
+    // 이전 실행이 남긴 제어 파일 제거 — 시작하자마자 숨거나 종료되는 사고 방지.
+    if let Some(p) = control_file() {
+        let _ = std::fs::remove_file(p);
+    }
 
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([320.0, 240.0])
@@ -59,7 +153,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Token Orbit",
         options,
-        Box::new(|cc| Ok(Box::new(HudApp::new(cc, rx)))),
+        Box::new(|cc| Ok(Box::new(HudApp::new(cc)))),
     )
 }
 
@@ -72,17 +166,110 @@ struct HudApp {
     settings: Settings,
     /// 시작 시 저장된 창 상태(위치·모드)를 아직 적용하지 않았으면 true.
     needs_restore: bool,
-    /// 관측 세션이 이미 도는 중이면 중복 실행 방지.
-    observing: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// 전역 단축키 등록을 살려두는 핸들.
+    _hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
 }
 
 impl HudApp {
-    fn new(cc: &eframe::CreationContext<'_>, rx: mpsc::Receiver<Msg>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // 창 제어(숨김·투과)에 쓸 실제 HWND를 여기서 확보한다.
+        #[cfg(windows)]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(h) = cc.window_handle() {
+                if let RawWindowHandle::Win32(w) = h.as_raw() {
+                    win32::register(isize::from(w.hwnd));
+                }
+            }
+        }
         theme::install(&cc.egui_ctx);
         let settings = Settings::load();
         if let Some(z) = settings.zoom {
             cc.egui_ctx.set_zoom_factor(z);
         }
+
+        let (tx, rx) = mpsc::channel::<Msg>();
+
+        // 수집 루프 — orbit-core를 돌려 뷰를 UI로 보낸다. 파일 감시 + heartbeat.
+        // ~/.token-orbit 디렉터리 감시에 control 파일 변경도 걸리므로, 여기서
+        // 제어 명령도 함께 소비한다 (쓰기 → ~0.3초 내 반응, Tauri 버전과 동일).
+        {
+            let tx = tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                let mut collectors = orbit_core::default_collectors();
+                let (tick_tx, tick_rx) = mpsc::channel::<()>();
+                let _watcher = orbit_core::watch::watch_sources_into(&collectors, tick_tx);
+                loop {
+                    // 제어 파일 확인 — 읽었으면 즉시 소비해 재실행을 막는다.
+                    // 창 제어는 여기서 Win32로 **직접** 처리한다: 숨김 상태에선 UI의
+                    // update()가 돌지 않아 메시지로 보내면 show가 영원히 처리되지 않는다(실측).
+                    if let Some(path) = control_file() {
+                        if let Ok(cmd) = std::fs::read_to_string(&path) {
+                            let _ = std::fs::remove_file(&path);
+                            let cmd = cmd.trim();
+                            #[cfg(windows)]
+                            match cmd {
+                                "show" => win32::set_visible(true),
+                                "hide" => win32::set_visible(false),
+                                "toggle" => win32::set_visible(!win32::is_visible()),
+                                "refresh" => trigger_observer(),
+                                "quit" => std::process::exit(0),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let view = orbit_core::aggregate::collect_all(&mut collectors);
+                    if tx.send(Msg::View(view)).is_err() {
+                        break; // UI 종료됨
+                    }
+                    // 숨김 상태에서도 명령이 처리되도록 명시적으로 깨운다.
+                    ctx.request_repaint();
+                    let _ = tick_rx.recv_timeout(Duration::from_secs(30));
+                    std::thread::sleep(Duration::from_millis(300)); // 디바운스
+                    while tick_rx.try_recv().is_ok() {}
+                }
+            });
+        }
+
+        // 전역 단축키 — Ctrl+Shift+O(투과 토글: 투과 중 유일한 탈출구),
+        // Ctrl+Shift+H(소환/숨김). 이벤트는 별도 스레드에서 받아 UI를 깨운다.
+        let mut hk_ghost = 0;
+        let mut hk_summon = 0;
+        let hotkeys = (|| {
+            use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+            use global_hotkey::GlobalHotKeyManager;
+            let mgr = GlobalHotKeyManager::new().ok()?;
+            let mods = Modifiers::CONTROL | Modifiers::SHIFT;
+            let ghost = HotKey::new(Some(mods), Code::KeyO);
+            let summon = HotKey::new(Some(mods), Code::KeyH);
+            hk_ghost = ghost.id();
+            hk_summon = summon.id();
+            mgr.register(ghost).ok()?;
+            mgr.register(summon).ok()?;
+            Some(mgr)
+        })();
+        {
+            let ctx = cc.egui_ctx.clone();
+            let (ghost_id, summon_id) = (hk_ghost, hk_summon);
+            std::thread::spawn(move || {
+                use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
+                while let Ok(ev) = GlobalHotKeyEvent::receiver().recv() {
+                    if ev.state() != HotKeyState::Pressed {
+                        continue;
+                    }
+                    // 숨김/투과 상태에선 update()가 안 돌 수 있어 여기서 직접 처리.
+                    if ev.id() == ghost_id {
+                        toggle_click_through_global();
+                    } else if ev.id() == summon_id {
+                        #[cfg(windows)]
+                        win32::set_visible(!win32::is_visible());
+                    }
+                    ctx.request_repaint(); // 체크 표시 등 UI 동기화
+                }
+            });
+        }
+
         Self {
             rx,
             view: None,
@@ -90,22 +277,10 @@ impl HudApp {
             last_height: 0.0,
             settings,
             needs_restore: true,
-            observing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            _hotkeys: hotkeys,
         }
     }
 
-    /// 수동 새로고침 — Claude 관측 세션을 1회 돌려 statusline tap을 강제 갱신.
-    fn trigger_refresh(&self) {
-        use std::sync::atomic::Ordering;
-        if self.observing.swap(true, Ordering::SeqCst) {
-            return; // 이미 도는 중
-        }
-        let flag = self.observing.clone();
-        std::thread::spawn(move || {
-            orbit_core::observer::poll_once(std::time::Duration::from_secs(40));
-            flag.store(false, Ordering::SeqCst);
-        });
-    }
 }
 
 impl eframe::App for HudApp {
@@ -126,19 +301,27 @@ impl eframe::App for HudApp {
             if let Some((x, y)) = self.settings.window_pos {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x as f32, y as f32)));
             }
+            // 클릭 투과는 세션 모드 — 재시작 시 항상 상호작용 가능으로 시작한다.
+            // (지난 세션의 투과 상태가 복원되면 시작하자마자 마우스가 안 닿는다.)
+            self.settings.click_through = false;
         }
 
-        // 새 뷰 수신 (논블로킹).
+        // 백그라운드 메시지 수신 (논블로킹). 창 제어는 스레드가 직접 처리한다.
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::View(v) => self.view = Some(v),
             }
         }
 
+        // Esc → 종료 (Tauri 버전과 동일한 계약).
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
         let sview = ui::SettingsView {
             always_on_top: self.settings.always_on_top,
             pos_locked: self.settings.pos_locked,
-            click_through: self.settings.click_through,
+            click_through: CLICK_THROUGH.load(std::sync::atomic::Ordering::SeqCst),
             opacity: self.settings.opacity,
         };
 
@@ -172,7 +355,7 @@ impl eframe::App for HudApp {
 
         // 빈 여백을 드래그하면 창 이동 — 위치 잠금·클릭 투과 중엔 안 함.
         if !self.settings.pos_locked
-            && !self.settings.click_through
+            && !CLICK_THROUGH.load(std::sync::atomic::Ordering::SeqCst)
             && ctx.input(|i| i.pointer.primary_down())
             && !ctx.is_using_pointer()
             && ctx.input(|i| i.pointer.is_decidedly_dragging())
@@ -194,7 +377,7 @@ impl eframe::App for HudApp {
         match action {
             Some(ui::Action::Refresh) => {
                 self.menu_open = false;
-                self.trigger_refresh();
+                trigger_observer();
             }
             Some(ui::Action::ToggleMenu) => self.menu_open = !self.menu_open,
             Some(ui::Action::ToggleAlwaysOnTop) => {
@@ -213,12 +396,8 @@ impl eframe::App for HudApp {
                 self.settings.save();
             }
             Some(ui::Action::ToggleClickThrough) => {
-                self.settings.click_through = !self.settings.click_through;
-                // egui: 이 창을 마우스 입력에 투과시킴.
-                ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(
-                    self.settings.click_through,
-                ));
-                self.settings.save();
+                toggle_click_through_global();
+                self.menu_open = false; // 투과되면 메뉴도 못 누르므로 닫아준다
             }
             Some(ui::Action::SetOpacity(o)) => {
                 self.settings.opacity = o;
