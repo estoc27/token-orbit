@@ -7,6 +7,7 @@ pub mod aggregate;
 pub mod collector;
 pub mod collectors;
 pub mod model;
+pub mod observer;
 pub mod watch;
 
 use collector::Collector;

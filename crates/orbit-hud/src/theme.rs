@@ -1,0 +1,65 @@
+//! HUD 색·간격 토큰 — 기존 CSS 디자인을 egui로 옮긴 것.
+
+use eframe::egui::{self, Color32};
+
+pub const CARD_BG: Color32 = Color32::from_rgba_premultiplied(20, 20, 24, 219); // .86 alpha
+pub const CARD_BORDER: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 26);
+pub const TEXT: Color32 = Color32::from_rgb(236, 236, 236);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(170, 170, 170);
+pub const TEXT_FAINT: Color32 = Color32::from_rgb(120, 120, 120);
+
+pub const BAR_TRACK: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 26);
+pub const BAR_OK: Color32 = Color32::from_rgb(76, 175, 130); // #4caf82
+pub const BAR_WARN: Color32 = Color32::from_rgb(230, 180, 34); // #e6b422
+pub const BAR_CRIT: Color32 = Color32::from_rgb(224, 93, 93); // #e05d5d
+
+pub const BADGE_BG: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 31);
+pub const ACCENT: Color32 = Color32::from_rgb(216, 180, 254); // 보라 (Fable note)
+
+pub const WARN_PCT: f64 = 80.0;
+pub const CRIT_PCT: f64 = 90.0;
+
+/// 사용률 %에 맞는 게이지 색.
+pub fn bar_color(used_percent: f64) -> Color32 {
+    if used_percent >= CRIT_PCT {
+        BAR_CRIT
+    } else if used_percent >= WARN_PCT {
+        BAR_WARN
+    } else {
+        BAR_OK
+    }
+}
+
+/// 한글 폰트 등록 — egui 기본 폰트엔 한글 글리프가 없어 □로 깨진다.
+/// Windows 시스템 폰트(맑은 고딕)를 런타임 로드한다 (배포 대상 PC에도 존재).
+fn install_korean_font(ctx: &egui::Context) {
+    // 여러 후보를 순서대로 시도 (OS/로캘 차이 대비).
+    let candidates = [
+        r"C:\Windows\Fonts\malgun.ttf",   // Windows 맑은 고딕
+        r"C:\Windows\Fonts\gulim.ttc",    // 구형 굴림
+    ];
+    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+        return; // 한글 폰트 없음 — 기본 폰트로 (라틴은 정상)
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "korean".to_owned(),
+        egui::FontData::from_owned(bytes).into(),
+    );
+    // 두 계열(비례/고정폭) 모두 한글을 폴백으로 추가 — 라틴은 기존 폰트가 우선.
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push("korean".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
+
+pub fn install(ctx: &egui::Context) {
+    install_korean_font(ctx);
+    let mut style = (*ctx.style()).clone();
+    style.visuals.override_text_color = Some(TEXT);
+    // 위젯 배경을 투명하게 — 우리가 카드를 직접 그린다.
+    style.visuals.panel_fill = Color32::TRANSPARENT;
+    style.visuals.window_fill = Color32::TRANSPARENT;
+    style.spacing.item_spacing = egui::vec2(0.0, 6.0);
+    ctx.set_style(style);
+}

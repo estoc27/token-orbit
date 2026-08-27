@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/orbit-core", "src-tauri"]
+members = ["crates/orbit-core", "crates/orbit-hud", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
