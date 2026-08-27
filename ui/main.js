@@ -130,13 +130,18 @@ function renderServiceToggles(payload) {
 }
 
 // ---- 폭 기반 스케일링 ----
-// 창 폭을 기준폭(320) 대비 비율로 환산해 콘텐츠 전체를 zoom으로 확대/축소한다.
-// 사용자가 창을 넓히면 글자·게이지가 함께 커진다.
+// 창 폭을 기준폭(320) 대비 비율로 환산해 콘텐츠를 transform:scale로 확대/축소한다.
+// zoom 속성은 레이아웃 폭 계산에 되먹임돼 확대↔축소 진동을 일으켰다(실측) —
+// transform은 레이아웃 계측에 영향을 주지 않아 루프가 생기지 않는다.
 const BASE_W = 320;
 let scale = 1;
 function applyScale() {
   scale = Math.min(2.5, Math.max(0.6, window.innerWidth / BASE_W));
-  document.body.style.zoom = scale;
+  const hud = document.getElementById("hud");
+  hud.style.transformOrigin = "0 0";
+  hud.style.transform = `scale(${scale})`;
+  // 스케일된 결과가 창 폭을 정확히 채우도록 레이아웃 폭을 역보정한다.
+  hud.style.width = `${window.innerWidth / scale}px`;
 }
 window.addEventListener("resize", () => {
   applyScale();
@@ -145,11 +150,11 @@ window.addEventListener("resize", () => {
 applyScale();
 
 // 내용 높이에 맞춰 창 높이 자동 조절 — 카드가 잘리지 않게.
-// zoom 적용 시 offsetHeight는 무배율 레이아웃 값이므로 scale을 곱해 실제 높이를 얻는다.
+// getBoundingClientRect는 transform이 반영된 실제 렌더 크기를 준다.
 let lastH = 0;
 async function autoResize() {
   const hud = document.getElementById("hud");
-  const need = Math.ceil(hud.offsetHeight * scale) + 2;
+  const need = Math.ceil(hud.getBoundingClientRect().height) + 2;
   if (Math.abs(need - lastH) < 3) return; // 미세 변동으로 인한 루프 방지
   lastH = need;
   try {
