@@ -30,14 +30,14 @@ body {
    비율이 폭으로 정해지는 구조라 대각선 그립 하나면 충분하다. */
 #grip {
   position: absolute;
-  right: 0;
-  bottom: 0;
+  right: 3px;
+  bottom: 2px;
   z-index: 20;
-  font-size: 13px;
-  line-height: 13px;
-  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  line-height: 12px;
+  color: rgba(255, 255, 255, 0.45);
   cursor: nwse-resize;
-  padding: 3px 4px;
+  padding: 2px;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -187,10 +187,12 @@ body.ghost #hint::after { content: " · 투과 중"; color: #e6b422; }
 
 .activity-note { font-size: 10px; color: #e6b422; margin-top: 3px; }
 
+/* 힌트 — 마지막 카드 내부 하단. 카드 밖 투명 여백을 만들지 않는다. */
 #hint {
-  text-align: center;
   font-size: 9px;
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.30);
+  margin-top: 6px;
+  padding-right: 14px; /* 우하단 그립과 겹치지 않게 */
 }
 
 .win-age { color: #e6b422; }

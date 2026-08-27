@@ -109,7 +109,18 @@ function render(payload) {
     return;
   }
   cardsEl.innerHTML = visible.map(cardHtml).join("");
+  appendFooter();
   autoResize();
+}
+
+// 힌트 줄과 그립을 마지막 카드 내부에 붙인다 — 카드 밖 투명 영역을 만들지 않기 위함.
+const HINT_HTML = `<div id="hint">드래그: 이동 · Esc: 종료 · Ctrl+Shift+O: 투과</div>`;
+const GRIP_HTML = `<div id="grip" title="크기 조절">◢</div>`;
+function appendFooter() {
+  const cards = cardsEl.querySelectorAll(".card");
+  const host = cards.length ? cards[cards.length - 1] : cardsEl;
+  host.insertAdjacentHTML("beforeend", HINT_HTML + GRIP_HTML);
+  host.style.position = "relative"; // 그립 absolute 기준
 }
 
 // 설정 메뉴의 서비스 체크박스 — 감지된 서비스가 자동으로 나열된다.
@@ -150,34 +161,33 @@ window.addEventListener("resize", () => {
 applyScale();
 
 // ---- 모서리 그립 리사이즈 ----
+// 그립은 매 렌더마다 카드 안에 다시 삽입되므로, 문서 레벨 이벤트 위임으로 처리한다.
 // OS 가장자리 리사이즈는 껐다(resizable:false) — 비율이 폭으로 정해지므로
 // 대각선 그립 하나로 폭을 끌고, 높이는 스케일에 맞춰 자동으로 따라온다.
 {
-  const grip = document.getElementById("grip");
   let rs = null;
-  grip.addEventListener("pointerdown", (e) => {
+  document.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest("#grip")) return;
     e.preventDefault();
     e.stopPropagation();
-    grip.setPointerCapture(e.pointerId);
-    rs = { x: e.screenX, w: window.innerWidth, h: window.innerHeight };
+    rs = { x: e.screenX, w: window.innerWidth, h: window.innerHeight, id: e.pointerId };
+    try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
   });
-  grip.addEventListener("pointermove", (e) => {
+  document.addEventListener("pointermove", (e) => {
     if (!rs) return;
     const newW = Math.min(800, Math.max(192, rs.w + (e.screenX - rs.x)));
-    // 드래그 중에는 비율 유지로 높이를 근사하고, 확정 높이는 autoResize가 다듬는다.
     const newH = Math.max(60, Math.round((rs.h * newW) / rs.w));
     appWindow.setSize(new tauriWin.LogicalSize(newW, newH)).catch(() => {});
   });
-  const end = (e) => {
+  const end = () => {
     if (!rs) return;
     rs = null;
-    try { grip.releasePointerCapture(e.pointerId); } catch (_) {}
     applyScale();
     lastH = 0; // 강제 재측정
     autoResize();
   };
-  grip.addEventListener("pointerup", end);
-  grip.addEventListener("pointercancel", end);
+  document.addEventListener("pointerup", end);
+  document.addEventListener("pointercancel", end);
 }
 
 // 내용 높이에 맞춰 창 높이 자동 조절 — 카드가 잘리지 않게.
