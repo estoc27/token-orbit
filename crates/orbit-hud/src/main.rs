@@ -197,9 +197,12 @@ impl HudApp {
             let tx = tx.clone();
             let ctx = cc.egui_ctx.clone();
             std::thread::spawn(move || {
+                // 수집 최소 간격 — 바쁜 소스가 루프를 돌리지 못하게 하는 바닥값.
+                const MIN_COLLECT: Duration = Duration::from_secs(5);
                 let mut collectors = orbit_core::default_collectors();
                 let (tick_tx, tick_rx) = mpsc::channel::<()>();
                 let _watcher = orbit_core::watch::watch_sources_into(&collectors, tick_tx);
+                let mut last_collect = std::time::Instant::now() - MIN_COLLECT;
                 loop {
                     // 제어 파일 확인 — 읽었으면 즉시 소비해 재실행을 막는다.
                     // 창 제어는 여기서 Win32로 **직접** 처리한다: 숨김 상태에선 UI의
@@ -219,12 +222,20 @@ impl HudApp {
                             }
                         }
                     }
-                    let view = orbit_core::aggregate::collect_all(&mut collectors);
-                    if tx.send(Msg::View(view)).is_err() {
-                        break; // UI 종료됨
+                    // 수집에는 하한 간격을 둔다. **활성 Codex 세션은 자기 JSONL을
+                    // 계속 쓰기 때문에**(실측) 감시 이벤트만 믿으면 루프가 초당 여러 번
+                    // 돌아 유휴 CPU를 태운다 (1.6% → 0.27%). 사용량 수치는 초 단위로
+                    // 의미가 바뀌지 않으며, 제어 파일 처리는 이 하한 위에 있어
+                    // 응답성(~0.3초)은 그대로다.
+                    if last_collect.elapsed() >= MIN_COLLECT {
+                        let view = orbit_core::aggregate::collect_all(&mut collectors);
+                        last_collect = std::time::Instant::now();
+                        if tx.send(Msg::View(view)).is_err() {
+                            break; // UI 종료됨
+                        }
+                        // 숨김 상태에서도 갱신이 반영되도록 명시적으로 깨운다.
+                        ctx.request_repaint();
                     }
-                    // 숨김 상태에서도 명령이 처리되도록 명시적으로 깨운다.
-                    ctx.request_repaint();
                     let _ = tick_rx.recv_timeout(Duration::from_secs(30));
                     std::thread::sleep(Duration::from_millis(300)); // 디바운스
                     while tick_rx.try_recv().is_ok() {}
@@ -418,7 +429,9 @@ impl eframe::App for HudApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, want_h)));
         }
 
-        // 수집 스레드가 UI를 깨우도록 주기적 리페인트 (나이 표시 갱신 등).
-        ctx.request_repaint_after(Duration::from_secs(1));
+        // 주기적 리페인트는 표시 나이·리셋 카운트다운을 흐르게 하는 용도뿐이고,
+        // 그 표시는 분 단위다. 데이터 변경·마우스 입력은 각각 수집 스레드와 egui가
+        // 즉시 깨우므로, 여기서 매초 깨울 이유가 없다.
+        ctx.request_repaint_after(Duration::from_secs(10));
     }
 }
